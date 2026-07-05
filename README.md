@@ -1,57 +1,110 @@
-# Matab Taghzieh
+# Dietoy
 
-Offline-first Persian RTL Windows desktop app for dietitians.
+Offline-first Windows desktop app for Persian RTL dietitian workflows.
 
-## Features
+## Main Features
 
-- Local SQLite client database
-- Add, edit, search, and archive clients
-- Nutrition calculator with saved-client selection or manual input
-- BMI, BMR, TDEE, target calories, protein, carbs, and fat calculations
-- Manual override for calories and macros
-- Login screen with default username/password: `admin` / `admin`
-- Change username/password inside Settings
-- Minimal Settings for dietitian name, clinic name, primary color, backup, and restore
-- Lightweight JSON data backup for professional updates
-- Full SQLite export for developer/archive use
-- No backend, no cloud, no internet required for customer use after installation
+- Local login with default credentials: `admin` / `admin`
+- Change username and password from Settings
+- Client database with add, edit, search, archive, notes, phone, email, and profile photo
+- Local SQLite storage only; no backend, no cloud
+- Client progress records with dated weight/body measurements
+- Nutrition calculator with saved-client selection or manual mode
+- BMI, BMR, TDEE, target calories, and macro grams
+- Manual override for calories, protein, carbs, and fat
+- Persian RTL interface with Vazirmatn typography
+- Theme settings: primary color, background color, text color, logo, and background image
+- Built-in Dietoy theme with background `#10517A`
+- Lightweight JSON backup/restore for professional updates
+- Windows installer package with desktop shortcut
 
-## Customer install
+## Logo
 
-The Windows installer is built by GitHub Actions.
+Put the default brand logo here:
 
-1. Open the repository on GitHub.
-2. Go to **Actions**.
-3. Open **Build Windows Installer**.
-4. Download the artifact named `matab-taghzieh-release-usb`.
-5. Extract the ZIP.
-6. Copy the extracted folder to a flash drive.
-7. On the customer laptop, double-click `INSTALL.vbs`.
-8. After install, open **Matab Taghzieh** from the desktop icon.
-
-Silent install is available with `INSTALL-SILENT.vbs`.
-
-## Update workflow
-
-This is the recommended professional update path:
-
-1. On the customer app, open **Settings**.
-2. Click **خروجی سبک برای آپدیت**.
-3. The app creates a small `matab-taghzieh-data-*.json` file in Documents.
-4. The customer sends only that JSON file.
-5. Build and deliver the new app installer.
-6. After installing the new version, open **Settings**.
-7. Click **بازیابی اطلاعات قبلی** and select the JSON file.
-8. Clients, settings, username, and password hash are restored.
-
-## Developer build
-
-Local build requires Node.js, Rust, and Microsoft C++ Build Tools on Windows:
-
-```bash
-npm install
-npm run build
-npm run tauri:build
+```text
+public/logo.png
 ```
 
-If local Windows build tools are heavy or slow to install, use GitHub Actions instead.
+Recommended: transparent PNG, square, 512x512 or larger.
+
+Users can also choose a logo inside the app from:
+
+```text
+Settings > Appearance > Logo
+```
+
+## Development
+
+```powershell
+npm.cmd install
+npm.cmd run tauri:dev
+```
+
+For a quick frontend-only check:
+
+```powershell
+npm.cmd run build
+```
+
+## Windows Build
+
+The recommended build path is GitHub Actions because it installs Rust and Windows build tools on GitHub's Windows runner.
+
+Manual local build requires Node.js, Rust/Cargo, Microsoft C++ Build Tools, and WebView2:
+
+```powershell
+npm.cmd install
+npm.cmd run tauri:build
+```
+
+The installer is generated under:
+
+```text
+src-tauri/target/release/bundle/nsis/
+```
+
+## Customer USB Package
+
+GitHub Actions creates a downloadable artifact named:
+
+```text
+dietoy-release-usb
+```
+
+The customer package contains:
+
+```text
+Dietoy-Setup.exe
+INSTALL.vbs
+INSTALL-SILENT.vbs
+README-USB.txt
+```
+
+For customers, copy the whole folder to a flash drive. They only need to double-click:
+
+```text
+INSTALL.vbs
+```
+
+`INSTALL-SILENT.vbs` runs the installer hidden.
+
+## Update Workflow
+
+Before installing a new version, the customer exports a small update backup from inside Dietoy:
+
+```text
+Settings > Backup and Update > Export lightweight update backup
+```
+
+After installing the new version, they restore that JSON file:
+
+```text
+Settings > Backup and Update > Restore previous data
+```
+
+This keeps clients, settings, credentials, notes, and records across app updates.
+
+## Data Storage
+
+Dietoy stores its SQLite database in the app data directory on the customer's Windows account. The identifier is intentionally kept stable so future app updates continue using the same data location.

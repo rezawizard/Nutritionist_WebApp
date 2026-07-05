@@ -1,5 +1,5 @@
 {
-  "name": "persian-dietitian-desktop",
+  "name": "dietoy",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -13,9 +13,9 @@
     "package:usb": "powershell -ExecutionPolicy Bypass -File installer/Build-USB-Package.ps1"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.5.0",
-    "@tauri-apps/plugin-dialog": "^2.4.1",
     "@fontsource/vazirmatn": "^5.2.6",
+    "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
