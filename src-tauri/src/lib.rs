@@ -95,6 +95,17 @@ fn write_setting(conn: &Connection, key: &str, value: &str) -> Result<(), String
     Ok(())
 }
 
+fn write_default_setting(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
+    let exists: Option<String> = conn
+        .query_row("SELECT value FROM settings WHERE key = ?1", params![key], |row| row.get(0))
+        .optional()
+        .map_err(|err| err.to_string())?;
+    if exists.is_none() {
+        write_setting(conn, key, value)?;
+    }
+    Ok(())
+}
+
 fn init_db(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "
@@ -121,24 +132,11 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|err| err.to_string())?;
 
-    let defaults = [
-        ("dietitian_name", "".to_string()),
-        ("clinic_name", "".to_string()),
-        ("primary_color", "#0f5b46".to_string()),
-        ("username", "admin".to_string()),
-        ("password_hash", hash_password("admin")),
-    ];
-
-    for (key, value) in defaults {
-        let exists: Option<String> = conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", params![key], |row| row.get(0))
-            .optional()
-            .map_err(|err| err.to_string())?;
-        if exists.is_none() {
-            write_setting(conn, key, &value)?;
-        }
-    }
-
+    write_default_setting(conn, "dietitian_name", "")?;
+    write_default_setting(conn, "clinic_name", "")?;
+    write_default_setting(conn, "primary_color", "#0f5b46")?;
+    write_default_setting(conn, "username", "admin")?;
+    write_default_setting(conn, "password_hash", &hash_password("admin"))?;
     Ok(())
 }
 
@@ -175,10 +173,12 @@ fn list_clients(state: tauri::State<'_, AppState>, include_archived: bool) -> Re
         "SELECT * FROM clients WHERE archived = 0 ORDER BY updated_at DESC"
     };
     let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
-    stmt.query_map([], row_to_client)
+    let clients = stmt
+        .query_map([], row_to_client)
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    Ok(clients)
 }
 
 #[tauri::command]
@@ -188,10 +188,12 @@ fn search_clients(state: tauri::State<'_, AppState>, query: String) -> Result<Ve
     let mut stmt = conn
         .prepare("SELECT * FROM clients WHERE archived = 0 AND full_name LIKE ?1 ORDER BY updated_at DESC LIMIT 20")
         .map_err(|err| err.to_string())?;
-    stmt.query_map(params![like_query], row_to_client)
+    let clients = stmt
+        .query_map(params![like_query], row_to_client)
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    Ok(clients)
 }
 
 #[tauri::command]
@@ -266,6 +268,7 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())?;
+
     Ok(DashboardStats {
         total_clients,
         active_clients,
