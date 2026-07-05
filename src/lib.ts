@@ -82,3 +82,16 @@ export function formatNumber(value: number, digits = 0) {
     minimumFractionDigits: digits,
   }).format(value);
 }
+
+export function formatPersianDate(date: Date | string = new Date()) {
+  return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  }).format(typeof date === "string" ? new Date(date) : date);
+}
+
+export function todayIsoDate() {
+  return new Date().toISOString().slice(0, 10);
+}
