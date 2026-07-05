@@ -71,3 +71,5 @@ jobs:
         with:
           name: matab-taghzieh-release-usb
           path: release-usb
+
+# Build trigger refreshed after backend fix.
