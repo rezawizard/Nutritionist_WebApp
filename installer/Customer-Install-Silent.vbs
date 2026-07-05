@@ -4,7 +4,7 @@ Dim shell, fso, folder, file, installer, command
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 folder = fso.GetParentFolderName(WScript.ScriptFullName)
-installer = fso.BuildPath(folder, "MatabTaghzieh-Setup.exe")
+installer = fso.BuildPath(folder, "Dietoy-Setup.exe")
 
 If Not fso.FileExists(installer) Then
   installer = ""
@@ -19,10 +19,10 @@ If Not fso.FileExists(installer) Then
 End If
 
 If installer = "" Then
-  MsgBox "Setup file was not found. Keep INSTALL-SILENT.vbs beside MatabTaghzieh-Setup.exe.", vbCritical, "Matab Taghzieh"
+  MsgBox "Setup file was not found. Keep INSTALL-SILENT.vbs beside Dietoy-Setup.exe.", vbCritical, "Dietoy"
   WScript.Quit 1
 End If
 
 command = """" & installer & """ /S"
 shell.Run command, 0, True
-MsgBox "Installation finished. You can open Matab Taghzieh from the desktop icon.", vbInformation, "Matab Taghzieh"
+MsgBox "Installation finished. You can open Dietoy from the desktop icon.", vbInformation, "Dietoy"

@@ -35,6 +35,9 @@ export const activityFactors: Record<ActivityLevel, number> = {
 
 export const emptyClient: Client = {
   full_name: "",
+  phone: "",
+  email: "",
+  profile_image_path: "",
   gender: "female",
   age: 30,
   height_cm: 165,

@@ -5,6 +5,9 @@ export type Goal = "lose" | "maintain" | "gain";
 export interface Client {
   id?: number;
   full_name: string;
+  phone: string;
+  email: string;
+  profile_image_path: string;
   gender: Gender;
   age: number;
   height_cm: number;
@@ -33,6 +36,9 @@ export interface Settings {
   clinic_name: string;
   primary_color: string;
   background_color: string;
+  text_color: string;
+  logo_path: string;
+  background_image_path: string;
   username: string;
 }
 

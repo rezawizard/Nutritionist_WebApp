@@ -10,6 +10,7 @@
   -webkit-font-smoothing: antialiased;
   --primary: #0f5b46;
   --app-bg: #f7f3ea;
+  --app-text: #26231f;
 }
 
 * {
@@ -26,6 +27,7 @@ body {
   margin: 0;
   direction: rtl;
   font-family: Vazirmatn, ui-sans-serif, system-ui, sans-serif;
+  color: var(--app-text);
 }
 
 body::before {
@@ -72,7 +74,7 @@ select {
 
 @layer components {
   .card {
-    @apply rounded-card border border-warm-100 bg-paper shadow-soft;
+    @apply rounded-card border border-warm-100 bg-paper text-charcoal shadow-soft;
   }
 
   .control {
