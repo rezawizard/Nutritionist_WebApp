@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color: #26231f;
+  background: #f7f3ea;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --primary: #0f5b46;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  direction: rtl;
+  font-family: Vazirmatn, ui-sans-serif, system-ui, sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='180' height='180' viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M24 72c28-38 104-38 132 0M24 108c28 38 104 38 132 0' fill='none' stroke='%23d8cbb9' stroke-width='1' stroke-opacity='.28'/%3E%3C/svg%3E");
+  background-size: 220px 220px;
+  opacity: 0.38;
+}
+
+.app-shell,
+.login-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.login-card {
+  position: relative;
+}
+
+.luxury-panel-line {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.numbers {
+  direction: ltr;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+.soft-transition {
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-warm-100 bg-paper shadow-soft;
+  }
+
+  .control {
+    @apply h-12 rounded-control border border-warm-200 bg-white px-4 text-sm text-charcoal outline-none soft-transition placeholder:text-warm-500 focus:border-[var(--primary)] focus:ring-4 focus:ring-emerald/10;
+  }
+
+  .label {
+    @apply text-sm font-medium text-charcoal;
+  }
+
+  .helper {
+    @apply text-xs leading-6 text-warm-500;
+  }
+}
