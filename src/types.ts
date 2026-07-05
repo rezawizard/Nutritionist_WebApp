@@ -17,10 +17,22 @@ export interface Client {
   updated_at?: string;
 }
 
+export interface ClientRecord {
+  id?: number;
+  client_id: number;
+  record_date: string;
+  weight_kg: number;
+  height_cm: number;
+  notes: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Settings {
   dietitian_name: string;
   clinic_name: string;
   primary_color: string;
+  background_color: string;
   username: string;
 }
 
