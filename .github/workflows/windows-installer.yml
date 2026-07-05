@@ -1,0 +1,52 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build Dietoy USB package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri installer
+        run: npm run tauri:build
+
+      - name: Prepare USB package
+        shell: pwsh
+        run: |
+          $releaseDir = Join-Path $pwd "release-usb"
+          $bundleDir = Join-Path $pwd "src-tauri\target\release\bundle\nsis"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $setup = Get-ChildItem -Path $bundleDir -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $setup) { throw "NSIS setup EXE was not found." }
+          Copy-Item $setup.FullName (Join-Path $releaseDir "Dietoy-Setup.exe") -Force
+          Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
+          Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
+          Copy-Item "installer\README-USB.txt" $releaseDir -Force
+
+      - name: Upload release-usb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dietoy-release-usb
+          path: release-usb
