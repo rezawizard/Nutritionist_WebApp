@@ -1,7 +1,9 @@
-name: Build Windows Installer From Repo
+name: Build Windows Installer
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
   build:
@@ -20,6 +22,30 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Generate app icons
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -AssemblyName System.Drawing
+          New-Item -ItemType Directory -Force -Path "src-tauri\icons" | Out-Null
+          $size = 256
+          $bmp = New-Object System.Drawing.Bitmap $size, $size
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+          $g.Clear([System.Drawing.Color]::Transparent)
+          $brush = New-Object System.Drawing.SolidBrush ([System.Drawing.ColorTranslator]::FromHtml("#0f5b46"))
+          $g.FillEllipse($brush, 18, 18, 220, 220)
+          $pen = New-Object System.Drawing.Pen ([System.Drawing.ColorTranslator]::FromHtml("#f7f3ea"), 13)
+          $g.DrawArc($pen, 62, 58, 132, 126, 205, 225)
+          $g.DrawLine($pen, 128, 67, 128, 190)
+          $g.DrawArc($pen, 88, 96, 96, 78, 40, 250)
+          $bmp.Save("src-tauri\icons\icon.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+          $stream = [System.IO.File]::Create("src-tauri\icons\icon.ico")
+          $icon.Save($stream)
+          $stream.Close()
+          $g.Dispose(); $brush.Dispose(); $pen.Dispose(); $bmp.Dispose(); $icon.Dispose()
+
       - name: Install frontend dependencies
         run: npm install
 
@@ -29,6 +55,7 @@ jobs:
       - name: Prepare USB package
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $releaseDir = Join-Path $pwd "release-usb"
           $bundleDir = Join-Path $pwd "src-tauri\target\release\bundle\nsis"
           New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
