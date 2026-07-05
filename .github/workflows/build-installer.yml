@@ -1,0 +1,57 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build release-usb package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path app | Out-Null
+          Expand-Archive -Path source/Nutritionist_WebApp-source.zip -DestinationPath app -Force
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Build Tauri installer
+        working-directory: app
+        run: npm run tauri:build
+
+      - name: Prepare USB package
+        shell: pwsh
+        run: |
+          $root = Join-Path $pwd "app"
+          $releaseDir = Join-Path $pwd "release-usb"
+          $bundleDir = Join-Path $root "src-tauri\target\release\bundle\nsis"
+          New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+          $setup = Get-ChildItem -Path $bundleDir -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $setup) { throw "NSIS setup EXE was not found." }
+          Copy-Item $setup.FullName (Join-Path $releaseDir "MatabTaghzieh-Setup.exe") -Force
+          Copy-Item (Join-Path $root "installer\Customer-Install.vbs") (Join-Path $releaseDir "INSTALL.vbs") -Force
+          Copy-Item (Join-Path $root "installer\Customer-Install-Silent.vbs") (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
+          Copy-Item (Join-Path $root "installer\README-USB.txt") $releaseDir -Force
+
+      - name: Upload release-usb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: matab-taghzieh-release-usb
+          path: release-usb
