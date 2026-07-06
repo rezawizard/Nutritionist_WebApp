@@ -2,6 +2,8 @@
 
 Offline-first Windows desktop app for Persian RTL dietitian workflows.
 
+Current update: `v0.2.0 Premium UI/UX Polish`.
+
 ## Main Features
 
 - Local login with default credentials: `admin` / `admin`
@@ -17,6 +19,26 @@ Offline-first Windows desktop app for Persian RTL dietitian workflows.
 - Built-in Dietoy theme with background `#10517A`
 - Lightweight JSON backup/restore for professional updates
 - Windows installer package with desktop shortcut
+
+## v0.2.0 — Premium UI/UX Polish
+
+This update keeps the current customer-ready feature set and improves perceived quality, release traceability, and premium visual polish without changing the local-first architecture.
+
+### Included in this update
+
+- App version bumped to `0.2.0` for the frontend package, Rust package, and Tauri installer metadata.
+- Premium CSS polish layer added for calmer surfaces, refined focus states, subtle surface animation, hover lift, result-card treatment, and long-use visual comfort.
+- Changelog added so future updates are traceable.
+- GitHub Actions artifact renamed to a versioned customer package: `dietoy-v0.2.0-release-usb`.
+- The installer workflow can now be run from update branches such as `codex/**` and `update/**`, not only `main`.
+
+### Not changed in this stable polish pass
+
+- Data model is unchanged.
+- SQLite storage path is unchanged.
+- Backup/restore format is unchanged.
+- Login/default credential behavior is unchanged.
+- Existing customer data should remain compatible.
 
 ## Logo
 
@@ -69,7 +91,7 @@ src-tauri/target/release/bundle/nsis/
 GitHub Actions creates a downloadable artifact named:
 
 ```text
-dietoy-release-usb
+dietoy-v0.2.0-release-usb
 ```
 
 The customer package contains:
@@ -108,3 +130,8 @@ This keeps clients, settings, credentials, notes, and records across app updates
 ## Data Storage
 
 Dietoy stores its SQLite database in the app data directory on the customer's Windows account. The identifier is intentionally kept stable so future app updates continue using the same data location.
+
+## Version History
+
+- `v0.1.0`: first customer-ready Dietoy installer pipeline and local-first feature set.
+- `v0.2.0`: premium UI/UX polish, versioned installer artifact, update branch release workflow, and changelog documentation.
