@@ -21,16 +21,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Show project files
+        shell: pwsh
+        run: |
+          Get-ChildItem -Force
+          Get-ChildItem src-tauri -Force
+          Get-ChildItem installer -Force
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install
+
+      - name: Build frontend
+        run: npm run build
 
       - name: Build Tauri installer
-        run: npm run tauri:build
+        run: npx tauri build --bundles nsis
 
       - name: Prepare USB package
         shell: pwsh
@@ -39,11 +48,15 @@ jobs:
           $bundleDir = Join-Path $pwd "src-tauri\target\release\bundle\nsis"
           New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
           $setup = Get-ChildItem -Path $bundleDir -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $setup) { throw "NSIS setup EXE was not found." }
+          if (-not $setup) {
+            if (Test-Path $bundleDir) { Get-ChildItem -Path $bundleDir -Recurse }
+            throw "NSIS setup EXE was not found."
+          }
           Copy-Item $setup.FullName (Join-Path $releaseDir "Dietoy-Setup.exe") -Force
           Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
           Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
           Copy-Item "installer\README-USB.txt" $releaseDir -Force
+          Get-ChildItem $releaseDir
 
       - name: Upload release-usb artifact
         uses: actions/upload-artifact@v4
