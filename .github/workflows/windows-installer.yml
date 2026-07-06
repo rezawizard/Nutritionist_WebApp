@@ -6,6 +6,8 @@ on:
   push:
     branches:
       - main
+      - "codex/**"
+      - "update/**"
     tags:
       - "v*"
 
@@ -62,5 +64,5 @@ jobs:
       - name: Upload release-usb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dietoy-release-usb
+          name: dietoy-v0.2.0-release-usb
           path: release-usb
