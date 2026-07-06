@@ -1,4 +1,5 @@
-name: Build Windows Installer
+name: USE THIS - Dietoy Final Installer
+run-name: USE THIS - Dietoy Final Installer
 
 on:
   workflow_dispatch:
