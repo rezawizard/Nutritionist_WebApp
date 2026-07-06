@@ -2,7 +2,7 @@
 
 Offline-first Windows desktop app for Persian RTL dietitian workflows.
 
-Current update: `v0.2.0 Premium UI/UX Polish`.
+Current update: `v0.2.1 Update-Safe Installer`.
 
 ## Main Features
 
@@ -19,12 +19,41 @@ Current update: `v0.2.0 Premium UI/UX Polish`.
 - Built-in Dietoy theme with background `#10517A`
 - Lightweight JSON backup/restore for professional updates
 - Windows installer package with desktop shortcut
+- Automatic safety backup before customer update install through `INSTALL.vbs`
+
+## v0.2.1 — Update-Safe Installer
+
+This update adds a professional update-safety layer for customer installs. When the customer runs `INSTALL.vbs`, the script checks the existing Dietoy app-data folder and creates a safety backup before launching the new installer.
+
+### Why this matters
+
+Dietoy stores customer data in the Windows app-data folder, separate from installed program files. Updating the app should replace the application files while preserving clients, settings, credentials, profile images, and records.
+
+### Automatic pre-install backup
+
+If previous Dietoy data exists, `INSTALL.vbs` creates this folder before installing the update:
+
+```text
+Documents\Dietoy Update Backups\pre-install-backup
+```
+
+The installer then continues normally. Existing app data remains in place; the backup is only a safety copy.
+
+### Update guarantee
+
+Do not change these without a planned migration:
+
+```text
+identifier: com.rezo.persian-dietitian
+SQLite data location: Windows app data directory
+SQLite filename: nutritionist.sqlite
+```
 
 ## v0.2.0 — Premium UI/UX Polish
 
 This update keeps the current customer-ready feature set and improves perceived quality, release traceability, and premium visual polish without changing the local-first architecture.
 
-### Included in this update
+### Included in v0.2.0
 
 - App version bumped to `0.2.0` for the frontend package, Rust package, and Tauri installer metadata.
 - Premium CSS polish layer added for calmer surfaces, refined focus states, subtle surface animation, hover lift, result-card treatment, and long-use visual comfort.
@@ -109,23 +138,31 @@ For customers, copy the whole folder to a flash drive. They only need to double-
 INSTALL.vbs
 ```
 
-`INSTALL-SILENT.vbs` runs the installer hidden.
+`INSTALL.vbs` first creates a safety backup if old Dietoy data exists, then starts the installer.
 
 ## Update Workflow
 
-Before installing a new version, the customer exports a small update backup from inside Dietoy:
+Professional customer update path:
+
+```text
+1. Customer opens the new release folder.
+2. Customer double-clicks INSTALL.vbs.
+3. INSTALL.vbs creates a safety backup from existing AppData when available.
+4. Dietoy installer updates the app files.
+5. Existing clients, settings, credentials, images, and records remain in AppData.
+```
+
+Manual backup is still available inside Dietoy:
 
 ```text
 Settings > Backup and Update > Export lightweight update backup
 ```
 
-After installing the new version, they restore that JSON file:
+Manual restore is still available when needed:
 
 ```text
 Settings > Backup and Update > Restore previous data
 ```
-
-This keeps clients, settings, credentials, notes, and records across app updates.
 
 ## Data Storage
 
@@ -135,3 +172,4 @@ Dietoy stores its SQLite database in the app data directory on the customer's Wi
 
 - `v0.1.0`: first customer-ready Dietoy installer pipeline and local-first feature set.
 - `v0.2.0`: premium UI/UX polish, versioned installer artifact, update branch release workflow, and changelog documentation.
+- `v0.2.1`: update-safe installer behavior with automatic pre-install safety backup.
