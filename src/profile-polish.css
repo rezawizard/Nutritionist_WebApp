@@ -1,0 +1,20 @@
+/* Safe profile polish before full React tabs. */
+.app-shell .card > h2:first-child {
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(216, 203, 185, 0.55);
+}
+
+.app-shell .card + .card {
+  margin-top: 0.4rem;
+}
+
+.app-shell .card p.helper,
+.app-shell .card .helper {
+  max-width: 720px;
+}
+
+@media (min-width: 1280px) {
+  .app-shell .card {
+    scroll-margin-top: 24px;
+  }
+}
