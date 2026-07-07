@@ -8,6 +8,8 @@ import {
   ClipboardList,
   Database,
   Download,
+  Eye,
+  FileText,
   FileUp,
   Home,
   Image as ImageIcon,
@@ -26,7 +28,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import {
   activityLabels,
   bmiCategory,
@@ -42,13 +44,18 @@ import {
 } from "./lib";
 import type {
   ActivityLevel,
+  Attachment,
+  AttachmentCategory,
   Client,
   ClientRecord,
   DashboardStats,
   Gender,
   Goal,
   Screen,
+  ServiceCatalogItem,
   Settings,
+  Visit,
+  VisitService,
   VisitStatus,
 } from "./types";
 
@@ -68,6 +75,20 @@ const dietoyTheme = {
   primary_color: "#0f5b46",
   background_color: "#10517A",
   text_color: "#f7f3ea",
+};
+
+const attachmentCategoryLabels: Record<AttachmentCategory, string> = {
+  body_analysis: "بادی‌آنالیز",
+  lab: "آزمایش",
+  medical_report: "گزارش پزشکی",
+  other: "سایر فایل‌ها",
+};
+
+const visitStatusOptions: Record<VisitStatus, string> = {
+  tentative: "موقت",
+  confirmed: "قطعی",
+  done: "انجام‌شده",
+  cancelled: "لغوشده",
 };
 
 type Toast = { id: number; text: string; kind?: "success" | "error" };
@@ -94,6 +115,10 @@ function assetUrl(path?: string) {
   if (!path) return "";
   if (path.startsWith("/") || path.startsWith("data:") || path.startsWith("http")) return path;
   return isDesktopRuntime() ? convertFileSrc(path) : path;
+}
+
+function fileExtension(path: string) {
+  return path.split(".").pop()?.toLowerCase() ?? "";
 }
 
 function applyVisualSettings(settings: Settings) {
@@ -592,6 +617,15 @@ function ProfileAvatar({ client, size = "md" }: { client: Client; size?: "md" | 
 function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null; onBack: () => void; onSaved: (client: Client) => void; toast: ToastFn }) {
   const [form, setForm] = useState<Client>(client ? normalizeClient(client) : { ...emptyClient });
   const [records, setRecords] = useState<ClientRecord[]>([]);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
+  const [attachmentForm, setAttachmentForm] = useState({ category: "body_analysis" as AttachmentCategory, title: "", attachment_date: todayIsoDate(), notes: "" });
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [selectedVisitId, setSelectedVisitId] = useState<number | "">("");
+  const [visitForm, setVisitForm] = useState({ visit_date: todayIsoDate(), status: "done" as VisitStatus, notes: "" });
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
+  const [visitServices, setVisitServices] = useState<VisitService[]>([]);
+  const [visitServiceForm, setVisitServiceForm] = useState({ service_id: "", service_name_snapshot: "", price: 0, quantity: 1, notes: "" });
   const [recordForm, setRecordForm] = useState({
     record_date: todayIsoDate(),
     weight_kg: client?.weight_kg ?? emptyClient.weight_kg,
@@ -608,14 +642,33 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
       height_cm: client?.height_cm ?? emptyClient.height_cm,
       notes: "",
     });
+    setSelectedAttachment(null);
+    setSelectedVisitId("");
+    setVisitServices([]);
     if (!client?.id || !isDesktopRuntime()) {
       setRecords([]);
+      setAttachments([]);
+      setVisits([]);
+      setServiceCatalog([]);
       return;
     }
-    invoke<ClientRecord[]>("list_client_records", { clientId: client.id })
-      .then(setRecords)
-      .catch(() => setRecords([]));
+    invoke<ClientRecord[]>("list_client_records", { clientId: client.id }).then(setRecords).catch(() => setRecords([]));
+    invoke<Attachment[]>("list_attachments", { clientId: client.id, category: null }).then(setAttachments).catch(() => setAttachments([]));
+    invoke<Visit[]>("list_visits", { clientId: client.id }).then((items) => { setVisits(items); if (items[0]?.id) setSelectedVisitId(items[0].id); }).catch(() => setVisits([]));
+    invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: true }).then(setServiceCatalog).catch(() => setServiceCatalog([]));
   }, [client]);
+
+  useEffect(() => {
+    if (!selectedVisitId || !isDesktopRuntime()) {
+      setVisitServices([]);
+      return;
+    }
+    invoke<VisitService[]>("list_visit_services", { visitId: selectedVisitId }).then(setVisitServices).catch(() => setVisitServices([]));
+  }, [selectedVisitId]);
+
+  const bodyAnalysisFiles = attachments.filter((item) => item.category === "body_analysis");
+  const otherAttachments = attachments.filter((item) => item.category !== "body_analysis");
+  const selectedVisit = visits.find((visit) => visit.id === selectedVisitId);
 
   const setField = <K extends keyof Client>(key: K, value: Client[K]) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -681,10 +734,102 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
     }
   };
 
+  const importAttachment = async () => {
+    if (!client?.id) {
+      toast("اول پرونده مراجع را ذخیره کنید.", "error");
+      return;
+    }
+    try {
+      const selected = await open({ multiple: false, filters: [{ name: "Files", extensions: ["pdf", "png", "jpg", "jpeg", "webp", "doc", "docx", "xls", "xlsx"] }] });
+      if (!selected || Array.isArray(selected)) return;
+      const attachment = await invoke<Attachment>("import_attachment", {
+        clientId: client.id,
+        visitId: selectedVisitId || null,
+        path: selected,
+        category: attachmentForm.category,
+        title: attachmentForm.title,
+        attachmentDate: attachmentForm.attachment_date,
+        notes: attachmentForm.notes,
+      });
+      setAttachments((items) => [attachment, ...items]);
+      setSelectedAttachment(attachment);
+      setAttachmentForm({ category: "body_analysis", title: "", attachment_date: todayIsoDate(), notes: "" });
+      toast("فایل به پرونده اضافه شد.");
+    } catch {
+      toast("افزودن فایل انجام نشد.", "error");
+    }
+  };
+
+  const saveVisit = async () => {
+    if (!client?.id) {
+      toast("اول پرونده مراجع را ذخیره کنید.", "error");
+      return;
+    }
+    try {
+      const visit = await invoke<Visit>("save_visit", {
+        visit: {
+          client_id: client.id,
+          visit_date: visitForm.visit_date,
+          status: visitForm.status,
+          notes: visitForm.notes,
+          total_fee: 0,
+        },
+      });
+      setVisits((items) => [visit, ...items]);
+      if (visit.id) setSelectedVisitId(visit.id);
+      setVisitForm({ visit_date: todayIsoDate(), status: "done", notes: "" });
+      toast("ویزیت ثبت شد.");
+    } catch {
+      toast("ثبت ویزیت انجام نشد.", "error");
+    }
+  };
+
+  const addVisitService = async () => {
+    if (!selectedVisitId) {
+      toast("اول یک ویزیت را انتخاب یا ثبت کنید.", "error");
+      return;
+    }
+    const selectedService = serviceCatalog.find((item) => String(item.id) === visitServiceForm.service_id);
+    const name = selectedService?.name || visitServiceForm.service_name_snapshot.trim();
+    if (!name) {
+      toast("نام خدمت را انتخاب یا وارد کنید.", "error");
+      return;
+    }
+    try {
+      const item = await invoke<VisitService>("save_visit_service", {
+        item: {
+          visit_id: selectedVisitId,
+          service_id: selectedService?.id ?? null,
+          service_name_snapshot: name,
+          price: visitServiceForm.price,
+          quantity: visitServiceForm.quantity,
+          total: visitServiceForm.price * visitServiceForm.quantity,
+          notes: visitServiceForm.notes,
+        },
+      });
+      setVisitServices((items) => [...items, item]);
+      setVisits((items) => items.map((visit) => visit.id === selectedVisitId ? { ...visit, total_fee: visit.total_fee + item.total } : visit));
+      setVisitServiceForm({ service_id: "", service_name_snapshot: "", price: 0, quantity: 1, notes: "" });
+      toast("خدمت به ویزیت اضافه شد.");
+    } catch {
+      toast("ثبت خدمت انجام نشد.", "error");
+    }
+  };
+
+  const selectService = (value: string) => {
+    const item = serviceCatalog.find((service) => String(service.id) === value);
+    setVisitServiceForm((current) => ({
+      ...current,
+      service_id: value,
+      service_name_snapshot: item?.name ?? "",
+      price: item?.default_price ?? current.price,
+    }));
+  };
+
   return (
     <>
-      <PageHeader title={client ? "پرونده مراجع" : "ثبت مراجع جدید"} subtitle="اطلاعات پایه، هدف، وقت بعدی و رکوردهای پایش را مدیریت کنید." action={<SecondaryButton icon={RotateCcw} onClick={onBack}>بازگشت</SecondaryButton>} />
-      <section className="grid gap-5 xl:grid-cols-[0.78fr_1.22fr]">
+      <PageHeader title={client ? "پرونده مراجع" : "ثبت مراجع جدید"} subtitle="اطلاعات پایه، رکوردها، بادی‌آنالیز، پیوست‌ها، و خدمات هر ویزیت را مدیریت کنید." action={<SecondaryButton icon={RotateCcw} onClick={onBack}>بازگشت</SecondaryButton>} />
+      <section className="grid gap-5 xl:grid-cols-[0.75fr_1.25fr]">
         <div className="card p-5">
           <div className="flex items-center gap-4">
             <ProfileAvatar client={form} size="lg" />
@@ -732,9 +877,121 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
               ))}
             </div>
           </div>
+
+          <div className="card p-5">
+            <h2 className="text-xl font-bold">بادی‌آنالیز و پیوست‌ها</h2>
+            <p className="helper mt-1">برای هر مراجع چند فایل با تاریخ مستقل ثبت می‌شود. بادی‌آنالیزها جدا نمایش داده می‌شوند.</p>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <SelectField label="نوع فایل" value={attachmentForm.category} onChange={(value) => setAttachmentForm((current) => ({ ...current, category: value as AttachmentCategory }))} options={attachmentCategoryLabels} />
+              <DateField label="تاریخ فایل" value={attachmentForm.attachment_date} onChange={(value) => setAttachmentForm((current) => ({ ...current, attachment_date: value }))} />
+              <TextField label="عنوان" value={attachmentForm.title} onChange={(value) => setAttachmentForm((current) => ({ ...current, title: value }))} />
+              <div className="flex items-end"><SecondaryButton icon={FileUp} onClick={importAttachment}>افزودن فایل</SecondaryButton></div>
+            </div>
+            <TextArea label="یادداشت فایل" value={attachmentForm.notes} onChange={(value) => setAttachmentForm((current) => ({ ...current, notes: value }))} />
+            <div className="mt-5 grid gap-5 xl:grid-cols-2">
+              <AttachmentList title="بادی‌آنالیزها" items={bodyAnalysisFiles} empty="بادی‌آنالیزی ثبت نشده است." onView={setSelectedAttachment} prominent />
+              <AttachmentList title="سایر پیوست‌ها" items={otherAttachments} empty="پیوست دیگری ثبت نشده است." onView={setSelectedAttachment} />
+            </div>
+            {selectedAttachment && <FilePreview attachment={selectedAttachment} />}
+          </div>
+
+          <div className="card p-5">
+            <h2 className="text-xl font-bold">ویزیت‌ها و خدمات</h2>
+            <p className="helper mt-1">خدمات هر جلسه از لیست تنظیمات انتخاب می‌شود و جمع هزینه جلسه خودکار محاسبه می‌شود.</p>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => setVisitForm((current) => ({ ...current, visit_date: value }))} />
+              <SelectField label="وضعیت" value={visitForm.status} onChange={(value) => setVisitForm((current) => ({ ...current, status: value as VisitStatus }))} options={visitStatusOptions} />
+              <TextField label="یادداشت ویزیت" value={visitForm.notes} onChange={(value) => setVisitForm((current) => ({ ...current, notes: value }))} />
+              <div className="flex items-end"><SecondaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</SecondaryButton></div>
+            </div>
+            <div className="mt-5 grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
+              <div className="grid gap-3">
+                {visits.length === 0 ? <EmptyState icon={CalendarDays} title="ویزیتی ثبت نشده" text="برای ثبت خدمات، ابتدا یک ویزیت بسازید." /> : visits.map((visit) => (
+                  <button key={visit.id} onClick={() => visit.id && setSelectedVisitId(visit.id)} className={cn("rounded-control border p-4 text-right soft-transition", selectedVisitId === visit.id ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-warm-100 bg-warm-50 hover:bg-paper")}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-bold">{formatPersianDate(visit.visit_date)}</span>
+                      <span className="numbers text-xs">{formatNumber(visit.total_fee, 0)} تومان</span>
+                    </div>
+                    <p className="mt-2 text-xs opacity-80">{visitStatusOptions[visit.status]}</p>
+                    {visit.notes && <p className="mt-2 text-xs opacity-80">{visit.notes}</p>}
+                  </button>
+                ))}
+              </div>
+              <div className="rounded-card border border-warm-100 bg-warm-50 p-4">
+                <h3 className="font-bold">خدمات ویزیت انتخاب‌شده</h3>
+                {selectedVisit && <p className="numbers mt-1 text-xs text-warm-500">جمع فعلی: {formatNumber(selectedVisit.total_fee, 0)} تومان</p>}
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <SelectField label="انتخاب خدمت" value={visitServiceForm.service_id} onChange={selectService} options={{ "": "انتخاب دستی/آزاد", ...Object.fromEntries(serviceCatalog.map((service) => [String(service.id), `${service.name} · ${formatNumber(service.default_price, 0)}`])) }} />
+                  <TextField label="نام خدمت آزاد" value={visitServiceForm.service_name_snapshot} onChange={(value) => setVisitServiceForm((current) => ({ ...current, service_name_snapshot: value }))} />
+                  <NumberField label="هزینه" value={visitServiceForm.price} onChange={(value) => setVisitServiceForm((current) => ({ ...current, price: value }))} />
+                  <NumberField label="تعداد" value={visitServiceForm.quantity} onChange={(value) => setVisitServiceForm((current) => ({ ...current, quantity: value }))} />
+                </div>
+                <TextArea label="یادداشت خدمت" value={visitServiceForm.notes} onChange={(value) => setVisitServiceForm((current) => ({ ...current, notes: value }))} />
+                <div className="mt-3"><SecondaryButton icon={Plus} onClick={addVisitService}>افزودن خدمت به ویزیت</SecondaryButton></div>
+                <div className="mt-4 grid gap-2">
+                  {visitServices.length === 0 ? <p className="text-sm text-warm-500">برای این ویزیت خدمتی ثبت نشده است.</p> : visitServices.map((item) => (
+                    <div key={item.id} className="rounded-control bg-paper p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold">{item.service_name_snapshot}</span>
+                        <span className="numbers text-sm text-olive">{formatNumber(item.total, 0)} تومان</span>
+                      </div>
+                      <p className="numbers mt-1 text-xs text-warm-500">{formatNumber(item.price, 0)} × {formatNumber(item.quantity, 1)}</p>
+                      {item.notes && <p className="mt-1 text-xs text-warm-500">{item.notes}</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </>
+  );
+}
+
+function AttachmentList({ title, items, empty, onView, prominent = false }: { title: string; items: Attachment[]; empty: string; onView: (attachment: Attachment) => void; prominent?: boolean }) {
+  return (
+    <div>
+      <h3 className="font-bold">{title}</h3>
+      <div className="mt-3 grid gap-2">
+        {items.length === 0 ? <p className="rounded-control bg-warm-50 p-4 text-sm text-warm-500">{empty}</p> : items.map((item) => (
+          <div key={item.id} className={cn("rounded-control border p-4", prominent ? "border-emerald/20 bg-emerald/5" : "border-warm-100 bg-warm-50")}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold">{item.title || item.file_name}</p>
+                <p className="mt-1 text-xs text-warm-500">{attachmentCategoryLabels[item.category]} · {formatPersianDate(item.attachment_date)}</p>
+              </div>
+              <button className="rounded-full bg-paper p-2 text-olive shadow-sm" onClick={() => onView(item)} aria-label="مشاهده فایل"><Eye size={17} /></button>
+            </div>
+            {item.notes && <p className="mt-2 text-xs leading-6 text-warm-500">{item.notes}</p>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FilePreview({ attachment }: { attachment: Attachment }) {
+  const src = assetUrl(attachment.local_path);
+  const ext = fileExtension(attachment.local_path || attachment.file_name);
+  const isImage = ["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ext);
+  return (
+    <div className="mt-5 rounded-card border border-warm-100 bg-warm-50 p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="font-bold">مشاهده فایل: {attachment.title || attachment.file_name}</p>
+          <p className="mt-1 text-xs text-warm-500">{formatPersianDate(attachment.attachment_date)} · {attachment.file_name}</p>
+        </div>
+        <FileText className="text-sage" size={22} />
+      </div>
+      {ext === "pdf" ? (
+        <iframe title={attachment.title || attachment.file_name} src={src} className="h-[520px] w-full rounded-control border border-warm-100 bg-white" />
+      ) : isImage ? (
+        <img src={src} alt={attachment.title || attachment.file_name} className="max-h-[520px] w-full rounded-control object-contain bg-white" />
+      ) : (
+        <div className="rounded-control bg-paper p-4 text-sm leading-7 text-warm-500">نمایش داخلی این فرمت محدود است. فایل در پرونده ذخیره شده و مسیر آن: <span className="numbers">{attachment.local_path}</span></div>
+      )}
+    </div>
   );
 }
 
@@ -789,11 +1046,18 @@ function CalculationsScreen({ initialClient, settings, toast }: { initialClient:
 function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; setSettings: (settings: Settings) => void; toast: ToastFn }) {
   const [form, setForm] = useState<Settings>(settings);
   const [credentials, setCredentials] = useState({ current_password: "", username: settings.username || "admin", password: "" });
+  const [services, setServices] = useState<ServiceCatalogItem[]>([]);
+  const [serviceForm, setServiceForm] = useState<ServiceCatalogItem>({ name: "", default_price: 0, active: true });
 
   useEffect(() => {
     setForm(settings);
     setCredentials((current) => ({ ...current, username: settings.username || "admin" }));
   }, [settings]);
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false }).then(setServices).catch(() => setServices([]));
+  }, []);
 
   const update = <K extends keyof Settings>(key: K, value: Settings[K]) => setForm((current) => ({ ...current, [key]: value }));
 
@@ -804,6 +1068,21 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
       toast("تنظیمات ذخیره شد.");
     } catch {
       toast("ذخیره تنظیمات انجام نشد.", "error");
+    }
+  };
+
+  const saveService = async () => {
+    if (!serviceForm.name.trim()) {
+      toast("نام خدمت را وارد کنید.", "error");
+      return;
+    }
+    try {
+      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", { item: serviceForm });
+      setServices((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      setServiceForm({ name: "", default_price: 0, active: true });
+      toast("خدمت ذخیره شد.");
+    } catch {
+      toast("ذخیره خدمت انجام نشد.", "error");
     }
   };
 
@@ -861,7 +1140,7 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
 
   return (
     <>
-      <PageHeader title="تنظیمات" subtitle="ظاهر، اطلاعات ورود، پشتیبان‌گیری و ضرایب محاسبات را مدیریت کنید." action={<PrimaryButton icon={Save} onClick={saveSettings}>ذخیره تنظیمات</PrimaryButton>} />
+      <PageHeader title="تنظیمات" subtitle="ظاهر، اطلاعات ورود، پشتیبان‌گیری، لیست خدمات و ضرایب محاسبات را مدیریت کنید." action={<PrimaryButton icon={Save} onClick={saveSettings}>ذخیره تنظیمات</PrimaryButton>} />
       <section className="grid gap-5 xl:grid-cols-2">
         <div className="card p-5">
           <h2 className="text-xl font-bold">برندینگ</h2>
@@ -892,6 +1171,27 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
               <SecondaryButton icon={FileUp} onClick={restoreBackup}>Restore</SecondaryButton>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="card mt-5 p-5">
+        <h2 className="text-xl font-bold">لیست خدمات قابل انتخاب در ویزیت</h2>
+        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px_160px_160px]">
+          <TextField label="نام خدمت" value={serviceForm.name} onChange={(value) => setServiceForm((current) => ({ ...current, name: value }))} />
+          <NumberField label="هزینه پیش‌فرض" value={serviceForm.default_price} onChange={(value) => setServiceForm((current) => ({ ...current, default_price: value }))} />
+          <SelectField label="وضعیت" value={serviceForm.active ? "active" : "inactive"} onChange={(value) => setServiceForm((current) => ({ ...current, active: value === "active" }))} options={{ active: "فعال", inactive: "غیرفعال" }} />
+          <div className="flex items-end"><SecondaryButton icon={Save} onClick={saveService}>ذخیره خدمت</SecondaryButton></div>
+        </div>
+        <div className="mt-5 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {services.length === 0 ? <p className="text-sm text-warm-500">هنوز خدمتی تعریف نشده است.</p> : services.map((service) => (
+            <button key={service.id} onClick={() => setServiceForm(service)} className="rounded-control border border-warm-100 bg-warm-50 p-4 text-right hover:bg-paper">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold">{service.name}</span>
+                <span className={cn("rounded-full px-2 py-1 text-xs", service.active ? "bg-emerald/10 text-emerald" : "bg-warm-100 text-warm-500")}>{service.active ? "فعال" : "غیرفعال"}</span>
+              </div>
+              <p className="numbers mt-2 text-sm text-warm-500">{formatNumber(service.default_price, 0)} تومان</p>
+            </button>
+          ))}
         </div>
       </section>
 
@@ -944,7 +1244,7 @@ function settingLabel(key: keyof typeof defaultCalculationSettings) {
   return labels[key];
 }
 
-function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: React.ReactNode }) {
+function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return (
     <header className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
       <div>
@@ -956,7 +1256,7 @@ function PageHeader({ title, subtitle, action }: { title: string; subtitle: stri
   );
 }
 
-function PrimaryButton({ icon: Icon, children, type = "button", onClick }: { icon: LucideIcon; children: React.ReactNode; type?: "button" | "submit"; onClick?: () => void }) {
+function PrimaryButton({ icon: Icon, children, type = "button", onClick }: { icon: LucideIcon; children: ReactNode; type?: "button" | "submit"; onClick?: () => void }) {
   return (
     <button type={type} onClick={onClick} className="soft-transition flex h-12 w-full items-center justify-center gap-2 rounded-control bg-[var(--primary)] px-5 text-sm font-bold text-white shadow-lift hover:brightness-105">
       <Icon size={20} />
@@ -965,7 +1265,7 @@ function PrimaryButton({ icon: Icon, children, type = "button", onClick }: { ico
   );
 }
 
-function SecondaryButton({ icon: Icon, children, onClick }: { icon: LucideIcon; children: React.ReactNode; onClick?: () => void }) {
+function SecondaryButton({ icon: Icon, children, onClick }: { icon: LucideIcon; children: ReactNode; onClick?: () => void }) {
   return (
     <button type="button" onClick={onClick} className="soft-transition flex h-11 items-center justify-center gap-2 rounded-control border border-warm-100 bg-paper px-4 text-sm font-semibold text-charcoal hover:bg-warm-50">
       <Icon size={18} />
@@ -1064,9 +1364,8 @@ function SelectField({ label, value, onChange, options }: { label: string; value
 function DateField({ label, value, onChange, compact = false }: { label: string; value: string; onChange: (value: string) => void; compact?: boolean }) {
   return (
     <label className="block">
-      {!compact && <span className="label">{label}</span>}
-      {compact && <span className="label">{label}</span>}
-      <input className="control mt-2 w-full" value={value} onChange={(event) => onChange(event.target.value)} type="date" />
+      <span className="label">{label}</span>
+      <input className={cn("control w-full", compact ? "mt-2" : "mt-2")} value={value} onChange={(event) => onChange(event.target.value)} type="date" />
       {value && <span className="mt-1 block text-xs text-warm-500">{formatPersianDate(value)}</span>}
     </label>
   );
