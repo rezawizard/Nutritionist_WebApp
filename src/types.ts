@@ -1,7 +1,8 @@
 export type Gender = "female" | "male";
 export type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
 export type Goal = "lose" | "maintain" | "gain";
-export type VisitStatus = "tentative" | "confirmed";
+export type VisitStatus = "tentative" | "confirmed" | "done" | "cancelled";
+export type AttachmentCategory = "body_analysis" | "lab" | "medical_report" | "other";
 
 export interface Client {
   id?: number;
@@ -32,6 +33,56 @@ export interface ClientRecord {
   notes: string;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface Attachment {
+  id?: number;
+  client_id: number;
+  visit_id?: number | null;
+  category: AttachmentCategory;
+  title: string;
+  file_name: string;
+  local_path: string;
+  attachment_date: string;
+  notes: string;
+  created_at?: string;
+  updated_at?: string;
+  sync_id?: string;
+  sync_status?: string;
+}
+
+export interface Visit {
+  id?: number;
+  client_id: number;
+  visit_date: string;
+  status: VisitStatus;
+  notes: string;
+  total_fee: number;
+  created_at?: string;
+  updated_at?: string;
+  sync_id?: string;
+  sync_status?: string;
+}
+
+export interface ServiceCatalogItem {
+  id?: number;
+  name: string;
+  default_price: number;
+  active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VisitService {
+  id?: number;
+  visit_id: number;
+  service_id?: number | null;
+  service_name_snapshot: string;
+  price: number;
+  quantity: number;
+  total: number;
+  notes: string;
+  created_at?: string;
 }
 
 export interface Settings {
