@@ -77,8 +77,7 @@ function assetUrl(path?: string) {
   if (!path) return "";
   if (path.startsWith("/") || path.startsWith("data:") || path.startsWith("http")) return path;
   return isDesktopRuntime() ? convertFileSrc(path) : path;
-}
-
+}\n
 function applyVisualSettings(settings: Settings) {
   document.documentElement.style.setProperty("--primary", settings.primary_color || defaultSettings.primary_color);
   document.documentElement.style.setProperty("--app-bg", settings.background_color || defaultSettings.background_color);
@@ -314,10 +313,8 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
 }
 
 function ClientRow({ client, onEdit, onCalculate, onArchive }: { client: Client; onEdit: () => void; onCalculate?: () => void; onArchive?: () => void }) {
-  return <div className="card flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between"><div className="flex items-center gap-3"><ProfileAvatar client={client} /><div><p className="font-bold">{client.full_name}</p><p className="mt-1 text-xs text-warm-500">{genderLabels[client.gender]} · {formatNumber(client.age)} سال · {goalLabels[client.goal]}</p>{client.next_visit_date && <p className="mt-1 text-xs text-olive">مراجعه بعدی: {formatPersianDate(client.next_visit_date)} · {client.next_visit_status === "confirmed" ? "قطعی" : "موقت"}</p>}</div></div><div className="flex flex-wrap gap-2"><SecondaryButton icon={PencilIcon} onClick={onEdit}>ویرایش</SecondaryButton>{onCalculate && <SecondaryButton icon={Calculator} onClick={onCalculate}>محاسبات</SecondaryButton>}{onArchive && <SecondaryButton icon={Archive} onClick={onArchive}>{client.archived ? "فعال‌سازی" : "بایگانی"}</SecondaryButton>}</div></div>;
+  return <div className="card flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between"><div className="flex items-center gap-3"><ProfileAvatar client={client} /><div><p className="font-bold">{client.full_name}</p><p className="mt-1 text-xs text-warm-500">{genderLabels[client.gender]} · {formatNumber(client.age)} سال · {goalLabels[client.goal]}</p>{client.next_visit_date && <p className="mt-1 text-xs text-olive">مراجعه بعدی: {formatPersianDate(client.next_visit_date)} · {client.next_visit_status === "confirmed" ? "قطعی" : "موقت"}</p>}</div></div><div className="flex flex-wrap gap-2"><SecondaryButton icon={ClipboardList} onClick={onEdit}>ویرایش</SecondaryButton>{onCalculate && <SecondaryButton icon={Calculator} onClick={onCalculate}>محاسبات</SecondaryButton>}{onArchive && <SecondaryButton icon={Archive} onClick={onArchive}>{client.archived ? "فعال‌سازی" : "بایگانی"}</SecondaryButton>}</div></div>;
 }
-
-function PencilIcon(props: { size?: number; className?: string }) { return <ClipboardList {...props} />; }
 
 function ProfileAvatar({ client, size = "md" }: { client: Client; size?: "md" | "lg" }) {
   const src = assetUrl(client.profile_image_path);
