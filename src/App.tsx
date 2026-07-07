@@ -5,6 +5,8 @@ import {
   Calculator,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   ClipboardList,
   Database,
   Download,
@@ -42,6 +44,16 @@ import {
   goalLabels,
   todayIsoDate,
 } from "./lib";
+import {
+  formatJalaliInput,
+  isoToJalali,
+  jalaliMonthLength,
+  jalaliToIso,
+  monthStartWeekday,
+  parseJalaliInput,
+  persianMonthNames,
+  persianWeekdays,
+} from "./persianDate";
 import type {
   ActivityLevel,
   Attachment,
@@ -111,6 +123,15 @@ function normalizeClient(client: Client): Client {
   };
 }
 
+function dateOnly(value?: string) {
+  return value?.slice(0, 10) ?? "";
+}
+
+function timeOnly(value?: string) {
+  const time = value?.includes("T") ? value.split("T")[1]?.slice(0, 5) : "";
+  return time || "";
+}
+
 function assetUrl(path?: string) {
   if (!path) return "";
   if (path.startsWith("/") || path.startsWith("data:") || path.startsWith("http")) return path;
@@ -142,6 +163,19 @@ function backgroundStyle(settings: Settings): CSSProperties {
 
 function addDaysIso(days: number) {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+}
+
+function moneyInput(value: number) {
+  return Number.isFinite(value) && value !== 0 ? new Intl.NumberFormat("fa-IR").format(value) : "";
+}
+
+function parseMoneyInput(value: string) {
+  const normalized = value
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[^0-9.-]/g, "");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function useToasts() {
@@ -414,7 +448,6 @@ function Dashboard({ version, settings, onNew, onCalculations, onEdit }: { versi
       <PageHeader
         title={settings.dietitian_name ? `سلام، ${settings.dietitian_name}` : "داشبورد روزانه"}
         subtitle={`امروز ${formatPersianDate()} است. مراجعات، پرونده‌ها و محاسبات تغذیه‌ای اینجا مدیریت می‌شوند.`}
-        action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>}
       />
       <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="card p-6 md:p-8">
@@ -622,7 +655,7 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
   const [attachmentForm, setAttachmentForm] = useState({ category: "body_analysis" as AttachmentCategory, title: "", attachment_date: todayIsoDate(), notes: "" });
   const [visits, setVisits] = useState<Visit[]>([]);
   const [selectedVisitId, setSelectedVisitId] = useState<number | "">("");
-  const [visitForm, setVisitForm] = useState({ visit_date: todayIsoDate(), status: "done" as VisitStatus, notes: "" });
+  const [visitForm, setVisitForm] = useState({ visit_date: todayIsoDate(), visit_time: "09:00", status: "done" as VisitStatus, notes: "" });
   const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [visitServices, setVisitServices] = useState<VisitService[]>([]);
   const [visitServiceForm, setVisitServiceForm] = useState({ service_id: "", service_name_snapshot: "", price: 0, quantity: 1, notes: "" });
@@ -769,7 +802,7 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
       const visit = await invoke<Visit>("save_visit", {
         visit: {
           client_id: client.id,
-          visit_date: visitForm.visit_date,
+          visit_date: `${visitForm.visit_date}T${visitForm.visit_time || "00:00"}`,
           status: visitForm.status,
           notes: visitForm.notes,
           total_fee: 0,
@@ -777,7 +810,7 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
       });
       setVisits((items) => [visit, ...items]);
       if (visit.id) setSelectedVisitId(visit.id);
-      setVisitForm({ visit_date: todayIsoDate(), status: "done", notes: "" });
+      setVisitForm({ visit_date: todayIsoDate(), visit_time: "09:00", status: "done", notes: "" });
       toast("ویزیت ثبت شد.");
     } catch {
       toast("ثبت ویزیت انجام نشد.", "error");
@@ -898,8 +931,9 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
           <div className="card p-5">
             <h2 className="text-xl font-bold">ویزیت‌ها و خدمات</h2>
             <p className="helper mt-1">خدمات هر جلسه از لیست تنظیمات انتخاب می‌شود و جمع هزینه جلسه خودکار محاسبه می‌شود.</p>
-            <div className="mt-4 grid gap-3 md:grid-cols-4">
+            <div className="mt-4 grid gap-3 md:grid-cols-5">
               <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => setVisitForm((current) => ({ ...current, visit_date: value }))} />
+              <TimeField label="ساعت ویزیت" value={visitForm.visit_time} onChange={(value) => setVisitForm((current) => ({ ...current, visit_time: value }))} />
               <SelectField label="وضعیت" value={visitForm.status} onChange={(value) => setVisitForm((current) => ({ ...current, status: value as VisitStatus }))} options={visitStatusOptions} />
               <TextField label="یادداشت ویزیت" value={visitForm.notes} onChange={(value) => setVisitForm((current) => ({ ...current, notes: value }))} />
               <div className="flex items-end"><SecondaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</SecondaryButton></div>
@@ -909,10 +943,10 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
                 {visits.length === 0 ? <EmptyState icon={CalendarDays} title="ویزیتی ثبت نشده" text="برای ثبت خدمات، ابتدا یک ویزیت بسازید." /> : visits.map((visit) => (
                   <button key={visit.id} onClick={() => visit.id && setSelectedVisitId(visit.id)} className={cn("rounded-control border p-4 text-right soft-transition", selectedVisitId === visit.id ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-warm-100 bg-warm-50 hover:bg-paper")}>
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold">{formatPersianDate(visit.visit_date)}</span>
+                      <span className="font-bold">{formatPersianDate(dateOnly(visit.visit_date))}</span>
                       <span className="numbers text-xs">{formatNumber(visit.total_fee, 0)} تومان</span>
                     </div>
-                    <p className="mt-2 text-xs opacity-80">{visitStatusOptions[visit.status]}</p>
+                    <p className="numbers mt-2 text-xs opacity-80">{timeOnly(visit.visit_date) ? `ساعت ${timeOnly(visit.visit_date)}` : "بدون ساعت"} · {visitStatusOptions[visit.status]}</p>
                     {visit.notes && <p className="mt-2 text-xs opacity-80">{visit.notes}</p>}
                   </button>
                 ))}
@@ -923,7 +957,7 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
                   <SelectField label="انتخاب خدمت" value={visitServiceForm.service_id} onChange={selectService} options={{ "": "انتخاب دستی/آزاد", ...Object.fromEntries(serviceCatalog.map((service) => [String(service.id), `${service.name} · ${formatNumber(service.default_price, 0)}`])) }} />
                   <TextField label="نام خدمت آزاد" value={visitServiceForm.service_name_snapshot} onChange={(value) => setVisitServiceForm((current) => ({ ...current, service_name_snapshot: value }))} />
-                  <NumberField label="هزینه" value={visitServiceForm.price} onChange={(value) => setVisitServiceForm((current) => ({ ...current, price: value }))} />
+                  <MoneyField label="هزینه" value={visitServiceForm.price} onChange={(value) => setVisitServiceForm((current) => ({ ...current, price: value }))} />
                   <NumberField label="تعداد" value={visitServiceForm.quantity} onChange={(value) => setVisitServiceForm((current) => ({ ...current, quantity: value }))} />
                 </div>
                 <TextArea label="یادداشت خدمت" value={visitServiceForm.notes} onChange={(value) => setVisitServiceForm((current) => ({ ...current, notes: value }))} />
@@ -997,16 +1031,29 @@ function FilePreview({ attachment }: { attachment: Attachment }) {
 
 function CalculationsScreen({ initialClient, settings, toast }: { initialClient: Client | null; settings: Settings; toast: ToastFn }) {
   const [clients, setClients] = useState<Client[]>([]);
+  const [query, setQuery] = useState("");
   const [form, setForm] = useState<Client>(initialClient ? normalizeClient(initialClient) : { ...emptyClient });
 
   useEffect(() => {
     setForm(initialClient ? normalizeClient(initialClient) : { ...emptyClient });
+    setQuery(initialClient?.full_name ?? "");
   }, [initialClient]);
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
     invoke<Client[]>("list_clients", { includeArchived: false }).then((items) => setClients(items.map(normalizeClient))).catch(() => setClients([]));
   }, []);
+
+  const searchResults = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const source = needle ? clients.filter((client) => [client.full_name, client.phone, client.email].some((value) => value.toLowerCase().includes(needle))) : clients;
+    return source.slice(0, 8);
+  }, [clients, query]);
+
+  const chooseClient = (client: Client) => {
+    setForm(normalizeClient(client));
+    setQuery(client.full_name);
+  };
 
   const result = calculateNutrition(form, settings);
   const setField = <K extends keyof Client>(key: K, value: Client[K]) => setForm((current) => ({ ...current, [key]: value }));
@@ -1017,7 +1064,21 @@ function CalculationsScreen({ initialClient, settings, toast }: { initialClient:
       <section className="grid gap-5 xl:grid-cols-[0.78fr_1.22fr]">
         <div className="card p-5">
           <div className="grid gap-4">
-            <SelectField label="انتخاب از مراجعین" value={String(form.id ?? "manual")} onChange={(value) => { const selected = clients.find((client) => String(client.id) === value); if (selected) setForm(normalizeClient(selected)); }} options={{ manual: "ورود دستی", ...Object.fromEntries(clients.map((client) => [String(client.id), client.full_name])) }} />
+            <div>
+              <label className="label">جست‌وجوی سریع مراجع</label>
+              <div className="relative mt-2">
+                <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={18} />
+                <input className="control w-full pr-11" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="نام، موبایل یا ایمیل مراجع را تایپ کنید" />
+              </div>
+              <div className="mt-2 max-h-64 overflow-auto rounded-control border border-warm-100 bg-warm-50 p-2">
+                {searchResults.length === 0 ? <p className="p-3 text-sm text-warm-500">مراجعی پیدا نشد. می‌توانید اطلاعات را دستی وارد کنید.</p> : searchResults.map((client) => (
+                  <button key={client.id} onClick={() => chooseClient(client)} className={cn("mb-2 flex w-full items-center justify-between rounded-control p-3 text-right text-sm hover:bg-paper", form.id === client.id && "bg-[var(--primary)] text-white")}>
+                    <span className="font-bold">{client.full_name}</span>
+                    <span className="numbers text-xs opacity-80">{client.phone || goalLabels[client.goal]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <SelectField label="جنسیت" value={form.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
             <NumberField label="سن" value={form.age} onChange={(value) => setField("age", value)} />
             <NumberField label="قد" value={form.height_cm} onChange={(value) => setField("height_cm", value)} suffix="cm" />
@@ -1178,7 +1239,7 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
         <h2 className="text-xl font-bold">لیست خدمات قابل انتخاب در ویزیت</h2>
         <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px_160px_160px]">
           <TextField label="نام خدمت" value={serviceForm.name} onChange={(value) => setServiceForm((current) => ({ ...current, name: value }))} />
-          <NumberField label="هزینه پیش‌فرض" value={serviceForm.default_price} onChange={(value) => setServiceForm((current) => ({ ...current, default_price: value }))} />
+          <MoneyField label="هزینه پیش‌فرض" value={serviceForm.default_price} onChange={(value) => setServiceForm((current) => ({ ...current, default_price: value }))} />
           <SelectField label="وضعیت" value={serviceForm.active ? "active" : "inactive"} onChange={(value) => setServiceForm((current) => ({ ...current, active: value === "active" }))} options={{ active: "فعال", inactive: "غیرفعال" }} />
           <div className="flex items-end"><SecondaryButton icon={Save} onClick={saveService}>ذخیره خدمت</SecondaryButton></div>
         </div>
@@ -1336,6 +1397,24 @@ function NumberField({ label, value, onChange, suffix }: { label: string; value:
   );
 }
 
+function MoneyField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  return (
+    <label className="block">
+      <span className="label">{label}</span>
+      <input className="control numbers mt-2 w-full" inputMode="numeric" value={moneyInput(value)} onChange={(event) => onChange(parseMoneyInput(event.target.value))} placeholder="مثلاً ۱۲۰٬۰۰۰" />
+    </label>
+  );
+}
+
+function TimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="block">
+      <span className="label">{label}</span>
+      <input className="control numbers mt-2 w-full" value={value} onChange={(event) => onChange(event.target.value)} type="time" />
+    </label>
+  );
+}
+
 function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
     <label className="block">
@@ -1362,11 +1441,72 @@ function SelectField({ label, value, onChange, options }: { label: string; value
 }
 
 function DateField({ label, value, onChange, compact = false }: { label: string; value: string; onChange: (value: string) => void; compact?: boolean }) {
+  const [display, setDisplay] = useState(value ? formatJalaliInput(value) : "");
+  const currentJalali = isoToJalali(value || todayIsoDate());
+  const [view, setView] = useState({ jy: currentJalali.jy, jm: currentJalali.jm });
+  const monthDays = jalaliMonthLength(view.jy, view.jm);
+  const start = monthStartWeekday(view.jy, view.jm);
+
+  useEffect(() => {
+    setDisplay(value ? formatJalaliInput(value) : "");
+    const next = isoToJalali(value || todayIsoDate());
+    setView({ jy: next.jy, jm: next.jm });
+  }, [value]);
+
+  const changeMonth = (delta: number) => {
+    setView((current) => {
+      let jm = current.jm + delta;
+      let jy = current.jy;
+      if (jm < 1) { jm = 12; jy -= 1; }
+      if (jm > 12) { jm = 1; jy += 1; }
+      return { jy, jm };
+    });
+  };
+
+  const setText = (next: string) => {
+    setDisplay(next);
+    if (!next.trim()) {
+      onChange("");
+      return;
+    }
+    const parsed = parseJalaliInput(next);
+    if (parsed) onChange(parsed);
+  };
+
+  const selectDay = (day: number) => {
+    const iso = jalaliToIso(view.jy, view.jm, day);
+    onChange(iso);
+    setDisplay(formatJalaliInput(iso));
+  };
+
   return (
-    <label className="block">
+    <label className="relative block">
       <span className="label">{label}</span>
-      <input className={cn("control w-full", compact ? "mt-2" : "mt-2")} value={value} onChange={(event) => onChange(event.target.value)} type="date" />
-      {value && <span className="mt-1 block text-xs text-warm-500">{formatPersianDate(value)}</span>}
+      <input className={cn("control numbers w-full", compact ? "mt-2" : "mt-2")} value={display} onChange={(event) => setText(event.target.value)} placeholder="۱۴۰۵/۰۴/۱۷" />
+      <div className="mt-2 rounded-control border border-warm-100 bg-paper p-3 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <button type="button" className="rounded-full bg-warm-50 p-2" onClick={() => changeMonth(-1)}><ChevronRight size={16} /></button>
+          <span className="font-bold">{persianMonthNames[view.jm - 1]} {formatNumber(view.jy, 0)}</span>
+          <button type="button" className="rounded-full bg-warm-50 p-2" onClick={() => changeMonth(1)}><ChevronLeft size={16} /></button>
+        </div>
+        <div className="grid grid-cols-7 gap-1 text-center text-xs text-warm-500">
+          {persianWeekdays.map((day) => <span key={day}>{day}</span>)}
+        </div>
+        <div className="mt-2 grid grid-cols-7 gap-1">
+          {Array.from({ length: start + monthDays }).map((_, index) => {
+            const day = index - start + 1;
+            if (day < 1) return <span key={`blank-${index}`} />;
+            const iso = jalaliToIso(view.jy, view.jm, day);
+            const active = iso === dateOnly(value);
+            return (
+              <button key={day} type="button" onClick={() => selectDay(day)} className={cn("numbers rounded-full py-2 text-xs hover:bg-warm-50", active && "bg-[var(--primary)] text-white hover:bg-[var(--primary)]")}>
+                {formatNumber(day, 0)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      {value && <span className="mt-1 block text-xs text-warm-500">{formatPersianDate(dateOnly(value))}</span>}
     </label>
   );
 }
