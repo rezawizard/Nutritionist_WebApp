@@ -93,8 +93,8 @@ select:focus-visible {
   letter-spacing: -0.01em;
 }
 
-/* Persian calendar is now compact: closed by default, opens only while the date field is active. */
-label.relative.block > input.control.numbers.w-full + .mt-2.rounded-control {
+/* Persian calendar is compact: closed by default, opens only while the date field is active. */
+label.relative.block > input.control.numbers.w-full + div {
   display: none;
   position: absolute;
   top: calc(100% + 6px);
@@ -105,7 +105,7 @@ label.relative.block > input.control.numbers.w-full + .mt-2.rounded-control {
   box-shadow: 0 24px 60px rgba(38, 35, 31, 0.18);
 }
 
-label.relative.block:focus-within > input.control.numbers.w-full + .mt-2.rounded-control {
+label.relative.block:focus-within > input.control.numbers.w-full + div {
   display: block;
   animation: surface-in 140ms ease-out both;
 }
