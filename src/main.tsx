@@ -7,6 +7,7 @@ import "@fontsource/vazirmatn/700.css";
 import "./styles.css";
 import "./profile-polish.css";
 import "./profileTabs";
+import "./pdfPreviewFix";
 import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
