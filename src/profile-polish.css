@@ -36,6 +36,60 @@
   box-shadow: 0 14px 34px rgba(15, 91, 70, 0.18);
 }
 
+.pdf-fallback-panel {
+  min-height: 220px;
+  border: 1px dashed rgba(15, 91, 70, 0.26);
+  border-radius: 1.25rem;
+  background: linear-gradient(135deg, rgba(15, 91, 70, 0.06), rgba(255, 252, 247, 0.94));
+  padding: 1.25rem;
+}
+
+.pdf-fallback-title {
+  font-weight: 800;
+  color: #26231f;
+}
+
+.pdf-fallback-text {
+  margin-top: 0.5rem;
+  color: #786f63;
+  font-size: 0.9rem;
+  line-height: 1.9;
+}
+
+.pdf-fallback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.pdf-fallback-actions button {
+  min-height: 2.65rem;
+  border: 1px solid rgba(216, 203, 185, 0.9);
+  border-radius: 1rem;
+  background: #fff;
+  padding: 0 1rem;
+  color: #26231f;
+  font-weight: 700;
+}
+
+.pdf-fallback-actions button:first-child {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: #fff;
+}
+
+.pdf-fallback-path {
+  margin-top: 1rem;
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.75);
+  padding: 0.75rem;
+  color: #786f63;
+  direction: ltr;
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+}
+
 .app-shell .card > h2:first-child {
   padding-bottom: 0.5rem;
   border-bottom: 1px solid rgba(216, 203, 185, 0.55);
