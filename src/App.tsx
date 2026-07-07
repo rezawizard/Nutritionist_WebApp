@@ -77,7 +77,8 @@ function assetUrl(path?: string) {
   if (!path) return "";
   if (path.startsWith("/") || path.startsWith("data:") || path.startsWith("http")) return path;
   return isDesktopRuntime() ? convertFileSrc(path) : path;
-}\n
+}
+
 function applyVisualSettings(settings: Settings) {
   document.documentElement.style.setProperty("--primary", settings.primary_color || defaultSettings.primary_color);
   document.documentElement.style.setProperty("--app-bg", settings.background_color || defaultSettings.background_color);
