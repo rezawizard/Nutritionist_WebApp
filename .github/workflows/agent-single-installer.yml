@@ -1,0 +1,50 @@
+name: Single Client Installer
+run-name: Package one Dietoy installer - ${{ github.sha }}
+
+on:
+  push:
+    branches:
+      - agent/client-ready-release
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/client-ready-release
+
+      - name: Download successful client release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 28976303592 --repo rezawizard/Nutritionist_WebApp --name dietoy-client-ready-release-usb --dir previous-release
+          New-Item -ItemType Directory -Force -Path single-installer | Out-Null
+          $setup = Get-ChildItem previous-release -Recurse -Filter 'Dietoy-Setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'Dietoy-Setup.exe was not found in the successful release.' }
+          Copy-Item $setup.FullName 'single-installer/Dietoy-Setup.exe' -Force
+          $files = Get-ChildItem single-installer -File
+          if ($files.Count -ne 1) { throw 'The final artifact must contain exactly one file.' }
+          Remove-Item '.github/workflows/agent-single-installer.yml' -Force
+
+      - name: Remove temporary workflow
+        shell: pwsh
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A .github/workflows/agent-single-installer.yml
+          git commit -m 'Keep release workflow clean'
+          git push origin HEAD:agent/client-ready-release
+
+      - name: Upload single installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dietoy-Setup-single-file
+          path: single-installer/Dietoy-Setup.exe
+          if-no-files-found: error
