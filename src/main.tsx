@@ -8,6 +8,7 @@ import "./styles.css";
 import "./profile-polish.css";
 import "./profileTabs";
 import "./clinicalUxGuard";
+import "./deliveryPolish";
 import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
