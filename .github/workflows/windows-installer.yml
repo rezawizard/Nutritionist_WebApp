@@ -37,6 +37,66 @@ jobs:
           Get-ChildItem src-tauri -Force
           Get-ChildItem installer -Force
 
+      - name: Patch Rust collection lifetime issue
+        shell: pwsh
+        run: |
+          $path = "src-tauri\src\lib.rs"
+          $content = Get-Content $path -Raw
+          $oldServices = @'
+fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Result<Vec<VisitService>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
+        .map_err(|err| err.to_string())?;
+    stmt.query_map(params![visit_id], row_to_visit_service)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+'@
+          $newServices = @'
+fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Result<Vec<VisitService>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
+        .map_err(|err| err.to_string())?;
+    let items = stmt
+        .query_map(params![visit_id], row_to_visit_service)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+'@
+          $oldAttachments = @'
+fn list_client_attachments(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<Attachment>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
+        .map_err(|err| err.to_string())?;
+    stmt.query_map(params![client_id], row_to_attachment)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+'@
+          $newAttachments = @'
+fn list_client_attachments(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<Attachment>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
+        .map_err(|err| err.to_string())?;
+    let items = stmt
+        .query_map(params![client_id], row_to_attachment)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+'@
+          $content = $content.Replace($oldServices, $newServices).Replace($oldAttachments, $newAttachments)
+          Set-Content -Path $path -Value $content -Encoding UTF8
+
       - name: Install frontend dependencies
         run: npm install
 
