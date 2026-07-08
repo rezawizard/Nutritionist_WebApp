@@ -200,14 +200,6 @@ struct DataBackup {
     clients: Vec<Client>,
     #[serde(default)]
     records: Vec<ClientRecord>,
-    #[serde(default)]
-    visits: Vec<Visit>,
-    #[serde(default)]
-    measurements: Vec<VisitMeasurements>,
-    #[serde(default)]
-    attachments: Vec<Attachment>,
-    #[serde(default)]
-    visit_services: Vec<VisitService>,
     settings: Vec<SettingEntry>,
 }
 
@@ -435,8 +427,6 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             quantity REAL NOT NULL DEFAULT 1,
             total REAL NOT NULL DEFAULT 0,
             notes TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE
         );
 
@@ -451,9 +441,6 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             attachment_date TEXT NOT NULL DEFAULT '',
             notes TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT '',
-            sync_id TEXT NOT NULL DEFAULT '',
-            sync_status TEXT NOT NULL DEFAULT 'local',
             FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
             FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL
         );
@@ -464,9 +451,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             default_price REAL NOT NULL DEFAULT 0,
             default_duration_minutes INTEGER,
             body_area_required INTEGER NOT NULL DEFAULT 0,
-            active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL DEFAULT '',
-            updated_at TEXT NOT NULL DEFAULT ''
+            active INTEGER NOT NULL DEFAULT 1
         );
         ",
     )
@@ -482,6 +467,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     )?;
     ensure_column(conn, "clients", "code", "code TEXT NOT NULL DEFAULT ''")?;
 
+    // Compatibility migrations for databases created by older Dietoy builds.
     ensure_column(conn, "visits", "visit_time", "visit_time TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "visits", "reason", "reason TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "visits", "clinical_notes", "clinical_notes TEXT NOT NULL DEFAULT ''")?;
@@ -492,26 +478,14 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "visits", "next_visit_status", "next_visit_status TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "visits", "legacy_record_id", "legacy_record_id INTEGER")?;
 
-    ensure_column(conn, "visit_services", "body_area", "body_area TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "visit_services", "device_name", "device_name TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "visit_services", "duration_minutes", "duration_minutes INTEGER")?;
-    ensure_column(conn, "visit_services", "created_at", "created_at TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "visit_services", "updated_at", "updated_at TEXT NOT NULL DEFAULT ''")?;
-
     ensure_column(conn, "attachments", "updated_at", "updated_at TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "attachments", "sync_id", "sync_id TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "attachments", "sync_status", "sync_status TEXT NOT NULL DEFAULT 'local'")?;
 
-    ensure_column(conn, "service_catalog", "default_duration_minutes", "default_duration_minutes INTEGER")?;
-    ensure_column(conn, "service_catalog", "body_area_required", "body_area_required INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(conn, "service_catalog", "created_at", "created_at TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "service_catalog", "updated_at", "updated_at TEXT NOT NULL DEFAULT ''")?;
-
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_visits_legacy_record_id ON visits(legacy_record_id) WHERE legacy_record_id IS NOT NULL",
-        [],
-    )
-    .map_err(|err| err.to_string())?;
+    ensure_column(conn, "visit_services", "body_area", "body_area TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(conn, "visit_services", "device_name", "device_name TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(conn, "visit_services", "duration_minutes", "duration_minutes INTEGER")?;
+    ensure_column(conn, "visit_services", "created_at", "created_at TEXT NOT NULL DEFAULT ''")?;
 
     migrate_legacy_records(conn)?;
 
@@ -542,9 +516,7 @@ fn migrate_legacy_records(conn: &Connection) -> Result<(), String> {
             id, created_at, updated_at
         FROM client_records
         WHERE NOT EXISTS (
-            SELECT 1 FROM visits
-            WHERE visits.legacy_record_id = client_records.id
-               OR (visits.client_id = client_records.client_id AND visits.visit_date = client_records.record_date)
+            SELECT 1 FROM visits WHERE visits.legacy_record_id = client_records.id
         )
         ",
         [],
@@ -1008,17 +980,18 @@ fn save_visit_service(state: tauri::State<'_, AppState>, service: VisitService) 
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     get_visit(&conn, service.visit_id)?;
     let total = if service.total > 0.0 { service.total } else { service.price * service.quantity.max(1.0) };
+    let timestamp = now();
     let id = if let Some(id) = service.id {
         conn.execute(
-            "UPDATE visit_services SET service_id=?1, service_name_snapshot=?2, body_area=?3, device_name=?4, duration_minutes=?5, price=?6, quantity=?7, total=?8, notes=?9, updated_at=?10 WHERE id=?11",
-            params![service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity, total, service.notes, now(), id],
+            "UPDATE visit_services SET service_id=?1, service_name_snapshot=?2, body_area=?3, device_name=?4, duration_minutes=?5, price=?6, quantity=?7, total=?8, notes=?9 WHERE id=?10",
+            params![service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity, total, service.notes, id],
         )
         .map_err(|err| err.to_string())?;
         id
     } else {
         conn.execute(
-            "INSERT INTO visit_services (visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-            params![service.visit_id, service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes, now()],
+            "INSERT INTO visit_services (visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![service.visit_id, service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes, timestamp],
         )
         .map_err(|err| err.to_string())?;
         conn.last_insert_rowid()
@@ -1373,52 +1346,12 @@ fn export_data_backup(state: tauri::State<'_, AppState>) -> Result<String, Strin
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())?;
 
-    let mut visits_stmt = conn
-        .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits ORDER BY client_id ASC, visit_date ASC, visit_time ASC, id ASC")
-        .map_err(|err| err.to_string())?;
-    let visits = visits_stmt
-        .query_map([], row_to_visit)
-        .map_err(|err| err.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())?;
-
-    let mut measurements_stmt = conn
-        .prepare("SELECT id, visit_id, weight_kg, height_cm, bmi_snapshot, body_fat_percent, muscle_mass, visceral_fat, waist_cm, abdomen_cm, hip_cm, chest_cm, arm_cm, thigh_cm, calf_cm, neck_cm, custom_measurements_json, notes, created_at, updated_at FROM visit_measurements ORDER BY visit_id ASC, id ASC")
-        .map_err(|err| err.to_string())?;
-    let measurements = measurements_stmt
-        .query_map([], row_to_measurements)
-        .map_err(|err| err.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())?;
-
-    let mut attachments_stmt = conn
-        .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments ORDER BY client_id ASC, attachment_date ASC, id ASC")
-        .map_err(|err| err.to_string())?;
-    let attachments = attachments_stmt
-        .query_map([], row_to_attachment)
-        .map_err(|err| err.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())?;
-
-    let mut visit_services_stmt = conn
-        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services ORDER BY visit_id ASC, id ASC")
-        .map_err(|err| err.to_string())?;
-    let visit_services = visit_services_stmt
-        .query_map([], row_to_visit_service)
-        .map_err(|err| err.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())?;
-
     let backup = DataBackup {
         app: "dietoy".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: now(),
         clients,
         records,
-        visits,
-        measurements,
-        attachments,
-        visit_services,
         settings,
     };
     let file_name = format!("dietoy-data-{}.json", Utc::now().format("%Y%m%d-%H%M%S"));
@@ -1441,14 +1374,6 @@ fn restore_data_backup(state: tauri::State<'_, AppState>, path: String) -> Resul
 
     let mut conn = state.conn.lock().map_err(|err| err.to_string())?;
     let tx = conn.transaction().map_err(|err| err.to_string())?;
-    tx.execute("DELETE FROM visit_services", [])
-        .map_err(|err| err.to_string())?;
-    tx.execute("DELETE FROM attachments", [])
-        .map_err(|err| err.to_string())?;
-    tx.execute("DELETE FROM visit_measurements", [])
-        .map_err(|err| err.to_string())?;
-    tx.execute("DELETE FROM visits", [])
-        .map_err(|err| err.to_string())?;
     tx.execute("DELETE FROM client_records", [])
         .map_err(|err| err.to_string())?;
     tx.execute("DELETE FROM clients", [])
@@ -1500,103 +1425,6 @@ fn restore_data_backup(state: tauri::State<'_, AppState>, path: String) -> Resul
                 record.notes,
                 record.created_at.unwrap_or_else(now),
                 record.updated_at.unwrap_or_else(now),
-            ],
-        )
-        .map_err(|err| err.to_string())?;
-    }
-
-    for visit in backup.visits {
-        tx.execute(
-            "INSERT INTO visits (id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, COALESCE(?14, ?15), COALESCE(?16, ?15))",
-            params![
-                visit.id,
-                visit.client_id,
-                visit.visit_date,
-                visit.visit_time,
-                visit.status,
-                visit.reason,
-                visit.clinical_notes,
-                visit.private_notes,
-                if visit.next_visit_enabled { 1 } else { 0 },
-                visit.next_visit_date,
-                visit.next_visit_time,
-                visit.next_visit_status,
-                visit.total_fee,
-                visit.created_at,
-                now(),
-                visit.updated_at,
-            ],
-        )
-        .map_err(|err| err.to_string())?;
-    }
-
-    for measurements in backup.measurements {
-        tx.execute(
-            "INSERT INTO visit_measurements (id, visit_id, weight_kg, height_cm, bmi_snapshot, body_fat_percent, muscle_mass, visceral_fat, waist_cm, abdomen_cm, hip_cm, chest_cm, arm_cm, thigh_cm, calf_cm, neck_cm, custom_measurements_json, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, COALESCE(?19, ?20), COALESCE(?21, ?20))",
-            params![
-                measurements.id,
-                measurements.visit_id,
-                measurements.weight_kg,
-                measurements.height_cm,
-                measurements.bmi_snapshot,
-                measurements.body_fat_percent,
-                measurements.muscle_mass,
-                measurements.visceral_fat,
-                measurements.waist_cm,
-                measurements.abdomen_cm,
-                measurements.hip_cm,
-                measurements.chest_cm,
-                measurements.arm_cm,
-                measurements.thigh_cm,
-                measurements.calf_cm,
-                measurements.neck_cm,
-                measurements.custom_measurements_json,
-                measurements.notes,
-                measurements.created_at,
-                now(),
-                measurements.updated_at,
-            ],
-        )
-        .map_err(|err| err.to_string())?;
-    }
-
-    for attachment in backup.attachments {
-        tx.execute(
-            "INSERT INTO attachments (id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at, updated_at, sync_status) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, COALESCE(?10, ?11), COALESCE(?12, ?11), 'local')",
-            params![
-                attachment.id,
-                attachment.client_id,
-                attachment.visit_id,
-                attachment.category,
-                attachment.title,
-                attachment.file_name,
-                attachment.local_path,
-                attachment.attachment_date,
-                attachment.notes,
-                attachment.created_at.clone(),
-                now(),
-                attachment.created_at,
-            ],
-        )
-        .map_err(|err| err.to_string())?;
-    }
-
-    for service in backup.visit_services {
-        tx.execute(
-            "INSERT INTO visit_services (id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12)",
-            params![
-                service.id,
-                service.visit_id,
-                service.service_id,
-                service.service_name_snapshot,
-                service.body_area,
-                service.device_name,
-                service.duration_minutes,
-                service.price,
-                service.quantity,
-                service.total,
-                service.notes,
-                now(),
             ],
         )
         .map_err(|err| err.to_string())?;
