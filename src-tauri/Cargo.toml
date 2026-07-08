@@ -1,6 +1,6 @@
 [package]
 name = "persian_dietitian_desktop"
-version = "0.2.0"
+version = "0.3.0"
 description = "Offline-first Persian dietitian desktop app"
 authors = ["Rezo"]
 edition = "2021"
