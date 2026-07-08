@@ -1032,10 +1032,12 @@ fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Resu
     let mut stmt = conn
         .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
         .map_err(|err| err.to_string())?;
-    stmt.query_map(params![visit_id], row_to_visit_service)
+    let items = stmt
+        .query_map(params![visit_id], row_to_visit_service)
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    Ok(items)
 }
 
 fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> {
@@ -1111,10 +1113,12 @@ fn list_client_attachments(state: tauri::State<'_, AppState>, client_id: i64) ->
     let mut stmt = conn
         .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
         .map_err(|err| err.to_string())?;
-    stmt.query_map(params![client_id], row_to_attachment)
+    let items = stmt
+        .query_map(params![client_id], row_to_attachment)
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    Ok(items)
 }
 
 fn open_path_with_system(path: PathBuf) -> Result<(), String> {
