@@ -177,11 +177,7 @@ struct CredentialsInput { current_password: String, username: String, password: 
 fn default_true() -> bool { true }
 fn now() -> String { Utc::now().to_rfc3339() }
 fn today() -> String { Utc::now().date_naive().to_string() }
-fn hash_password(password: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(password.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
+fn hash_password(password: &str) -> String { let mut hasher = Sha256::new(); hasher.update(password.as_bytes()); format!("{:x}", hasher.finalize()) }
 fn is_valid_iso_date(value: &str) -> bool { NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok() }
 fn is_valid_time(value: &str) -> bool {
     if value.is_empty() { return true; }
@@ -209,19 +205,12 @@ fn validate_visit_input(visit: &Visit) -> Result<(), String> {
 }
 fn validate_measurements_input(measurements: &VisitMeasurements) -> Result<(), String> {
     if !(1.0..=400.0).contains(&measurements.weight_kg) { return Err("وزن ویزیت باید عددی بین ۱ تا ۴۰۰ کیلوگرم باشد.".to_string()); }
-    if let Some(height) = measurements.height_cm {
-        if !(40.0..=250.0).contains(&height) { return Err("قد ویزیت باید عددی بین ۴۰ تا ۲۵۰ سانتی‌متر باشد.".to_string()); }
-    }
+    if let Some(height) = measurements.height_cm { if !(40.0..=250.0).contains(&height) { return Err("قد ویزیت باید عددی بین ۴۰ تا ۲۵۰ سانتی‌متر باشد.".to_string()); } }
     Ok(())
 }
 
-fn read_setting(conn: &Connection, key: &str) -> Result<String, String> {
-    conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |row| row.get(0)).map_err(|err| err.to_string())
-}
-fn write_setting(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
-    conn.execute("INSERT INTO settings (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value]).map_err(|err| err.to_string())?;
-    Ok(())
-}
+fn read_setting(conn: &Connection, key: &str) -> Result<String, String> { conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |row| row.get(0)).map_err(|err| err.to_string()) }
+fn write_setting(conn: &Connection, key: &str, value: &str) -> Result<(), String> { conn.execute("INSERT INTO settings (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![key, value]).map_err(|err| err.to_string())?; Ok(()) }
 fn write_default_setting(conn: &Connection, key: &str, value: &str) -> Result<(), String> {
     let exists: Option<String> = conn.query_row("SELECT value FROM settings WHERE key=?1", params![key], |row| row.get(0)).optional().map_err(|err| err.to_string())?;
     if exists.is_none() { write_setting(conn, key, value)?; }
@@ -231,140 +220,55 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str)
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table)).map_err(|err| err.to_string())?;
     let mapped = stmt.query_map([], |row| row.get::<_, String>(1)).map_err(|err| err.to_string())?;
     let columns = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    if !columns.iter().any(|name| name == column) {
-        conn.execute(&format!("ALTER TABLE {} ADD COLUMN {}", table, definition), []).map_err(|err| err.to_string())?;
-    }
+    if !columns.iter().any(|name| name == column) { conn.execute(&format!("ALTER TABLE {} ADD COLUMN {}", table, definition), []).map_err(|err| err.to_string())?; }
     Ok(())
 }
 
 fn init_db(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "PRAGMA foreign_keys=ON;
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT NOT NULL, gender TEXT NOT NULL, age INTEGER NOT NULL,
-            height_cm REAL NOT NULL, weight_kg REAL NOT NULL, activity_level TEXT NOT NULL, goal TEXT NOT NULL,
-            notes TEXT NOT NULL DEFAULT '', archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        );
+        CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT NOT NULL, gender TEXT NOT NULL, age INTEGER NOT NULL, height_cm REAL NOT NULL, weight_kg REAL NOT NULL, activity_level TEXT NOT NULL, goal TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS client_records (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL, record_date TEXT NOT NULL, weight_kg REAL NOT NULL,
-            height_cm REAL NOT NULL, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
-        );
-        CREATE TABLE IF NOT EXISTS visits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL, visit_date TEXT NOT NULL, visit_time TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'completed', reason TEXT NOT NULL DEFAULT '', clinical_notes TEXT NOT NULL DEFAULT '', private_notes TEXT NOT NULL DEFAULT '',
-            next_visit_enabled INTEGER NOT NULL DEFAULT 0, next_visit_date TEXT NOT NULL DEFAULT '', next_visit_time TEXT NOT NULL DEFAULT '', next_visit_status TEXT NOT NULL DEFAULT '',
-            total_fee REAL NOT NULL DEFAULT 0, legacy_record_id INTEGER UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
-        );
-        CREATE TABLE IF NOT EXISTS visit_measurements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, visit_id INTEGER NOT NULL UNIQUE, weight_kg REAL NOT NULL, height_cm REAL, bmi_snapshot REAL,
-            body_fat_percent REAL, muscle_mass REAL, visceral_fat REAL, waist_cm REAL, abdomen_cm REAL, hip_cm REAL, chest_cm REAL,
-            arm_cm REAL, thigh_cm REAL, calf_cm REAL, neck_cm REAL, custom_measurements_json TEXT, notes TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE
-        );
-        CREATE TABLE IF NOT EXISTS visit_services (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, visit_id INTEGER NOT NULL, service_id INTEGER, service_name_snapshot TEXT NOT NULL,
-            body_area TEXT NOT NULL DEFAULT '', device_name TEXT NOT NULL DEFAULT '', duration_minutes INTEGER, price REAL NOT NULL DEFAULT 0,
-            quantity REAL NOT NULL DEFAULT 1, total REAL NOT NULL DEFAULT 0, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '',
-            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE, FOREIGN KEY(service_id) REFERENCES service_catalog(id) ON DELETE SET NULL
-        );
-        CREATE TABLE IF NOT EXISTS attachments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL, visit_id INTEGER, category TEXT NOT NULL DEFAULT 'other',
-            title TEXT NOT NULL DEFAULT '', file_name TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', attachment_date TEXT NOT NULL DEFAULT '',
-            notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '', sync_id TEXT NOT NULL DEFAULT '', sync_status TEXT NOT NULL DEFAULT 'local',
-            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE, FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL
-        );
-        CREATE TABLE IF NOT EXISTS service_catalog (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, default_price REAL NOT NULL DEFAULT 0, default_duration_minutes INTEGER,
-            body_area_required INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
-        );"
+        CREATE TABLE IF NOT EXISTS client_records (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL, record_date TEXT NOT NULL, weight_kg REAL NOT NULL, height_cm REAL NOT NULL, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS visits (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL, visit_date TEXT NOT NULL, visit_time TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'completed', reason TEXT NOT NULL DEFAULT '', clinical_notes TEXT NOT NULL DEFAULT '', private_notes TEXT NOT NULL DEFAULT '', next_visit_enabled INTEGER NOT NULL DEFAULT 0, next_visit_date TEXT NOT NULL DEFAULT '', next_visit_time TEXT NOT NULL DEFAULT '', next_visit_status TEXT NOT NULL DEFAULT '', total_fee REAL NOT NULL DEFAULT 0, legacy_record_id INTEGER UNIQUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS visit_measurements (id INTEGER PRIMARY KEY AUTOINCREMENT, visit_id INTEGER NOT NULL UNIQUE, weight_kg REAL NOT NULL, height_cm REAL, bmi_snapshot REAL, body_fat_percent REAL, muscle_mass REAL, visceral_fat REAL, waist_cm REAL, abdomen_cm REAL, hip_cm REAL, chest_cm REAL, arm_cm REAL, thigh_cm REAL, calf_cm REAL, neck_cm REAL, custom_measurements_json TEXT, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS visit_services (id INTEGER PRIMARY KEY AUTOINCREMENT, visit_id INTEGER NOT NULL, service_id INTEGER, service_name_snapshot TEXT NOT NULL, body_area TEXT NOT NULL DEFAULT '', device_name TEXT NOT NULL DEFAULT '', duration_minutes INTEGER, price REAL NOT NULL DEFAULT 0, quantity REAL NOT NULL DEFAULT 1, total REAL NOT NULL DEFAULT 0, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '', FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE, FOREIGN KEY(service_id) REFERENCES service_catalog(id) ON DELETE SET NULL);
+        CREATE TABLE IF NOT EXISTS attachments (id INTEGER PRIMARY KEY AUTOINCREMENT, client_id INTEGER NOT NULL, visit_id INTEGER, category TEXT NOT NULL DEFAULT 'other', title TEXT NOT NULL DEFAULT '', file_name TEXT NOT NULL DEFAULT '', local_path TEXT NOT NULL DEFAULT '', attachment_date TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '', sync_id TEXT NOT NULL DEFAULT '', sync_status TEXT NOT NULL DEFAULT 'local', FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE, FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL);
+        CREATE TABLE IF NOT EXISTS service_catalog (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, default_price REAL NOT NULL DEFAULT 0, default_duration_minutes INTEGER, body_area_required INTEGER NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '');"
     ).map_err(|err| err.to_string())?;
 
     ensure_column(conn, "clients", "phone", "phone TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "clients", "email", "email TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "clients", "profile_image_path", "profile_image_path TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "clients", "code", "code TEXT NOT NULL DEFAULT ''")?;
-
-    for (table, cols) in [
-        ("visits", vec![
-            ("visit_time", "visit_time TEXT NOT NULL DEFAULT ''"), ("reason", "reason TEXT NOT NULL DEFAULT ''"),
-            ("clinical_notes", "clinical_notes TEXT NOT NULL DEFAULT ''"), ("private_notes", "private_notes TEXT NOT NULL DEFAULT ''"),
-            ("next_visit_enabled", "next_visit_enabled INTEGER NOT NULL DEFAULT 0"), ("next_visit_date", "next_visit_date TEXT NOT NULL DEFAULT ''"),
-            ("next_visit_time", "next_visit_time TEXT NOT NULL DEFAULT ''"), ("next_visit_status", "next_visit_status TEXT NOT NULL DEFAULT ''"),
-            ("legacy_record_id", "legacy_record_id INTEGER UNIQUE")]),
-        ("visit_services", vec![("body_area", "body_area TEXT NOT NULL DEFAULT ''"), ("device_name", "device_name TEXT NOT NULL DEFAULT ''"), ("duration_minutes", "duration_minutes INTEGER"), ("created_at", "created_at TEXT NOT NULL DEFAULT ''")]),
-        ("attachments", vec![("visit_id", "visit_id INTEGER"), ("updated_at", "updated_at TEXT NOT NULL DEFAULT ''"), ("sync_id", "sync_id TEXT NOT NULL DEFAULT ''"), ("sync_status", "sync_status TEXT NOT NULL DEFAULT 'local'")]),
-        ("service_catalog", vec![("default_duration_minutes", "default_duration_minutes INTEGER"), ("body_area_required", "body_area_required INTEGER NOT NULL DEFAULT 0"), ("created_at", "created_at TEXT NOT NULL DEFAULT ''"), ("updated_at", "updated_at TEXT NOT NULL DEFAULT ''")]),
-    ] {
+    for (table, cols) in [("visits", vec![("visit_time", "visit_time TEXT NOT NULL DEFAULT ''"), ("reason", "reason TEXT NOT NULL DEFAULT ''"), ("clinical_notes", "clinical_notes TEXT NOT NULL DEFAULT ''"), ("private_notes", "private_notes TEXT NOT NULL DEFAULT ''"), ("next_visit_enabled", "next_visit_enabled INTEGER NOT NULL DEFAULT 0"), ("next_visit_date", "next_visit_date TEXT NOT NULL DEFAULT ''"), ("next_visit_time", "next_visit_time TEXT NOT NULL DEFAULT ''"), ("next_visit_status", "next_visit_status TEXT NOT NULL DEFAULT ''"), ("legacy_record_id", "legacy_record_id INTEGER UNIQUE")]), ("visit_services", vec![("body_area", "body_area TEXT NOT NULL DEFAULT ''"), ("device_name", "device_name TEXT NOT NULL DEFAULT ''"), ("duration_minutes", "duration_minutes INTEGER"), ("created_at", "created_at TEXT NOT NULL DEFAULT ''")]), ("attachments", vec![("visit_id", "visit_id INTEGER"), ("updated_at", "updated_at TEXT NOT NULL DEFAULT ''"), ("sync_id", "sync_id TEXT NOT NULL DEFAULT ''"), ("sync_status", "sync_status TEXT NOT NULL DEFAULT 'local'")]), ("service_catalog", vec![("default_duration_minutes", "default_duration_minutes INTEGER"), ("body_area_required", "body_area_required INTEGER NOT NULL DEFAULT 0"), ("created_at", "created_at TEXT NOT NULL DEFAULT ''"), ("updated_at", "updated_at TEXT NOT NULL DEFAULT ''")])] {
         for (column, definition) in cols { ensure_column(conn, table, column, definition)?; }
     }
-
     migrate_legacy_records(conn)?;
-    for (key, value) in [
-        ("dietitian_name", ""), ("clinic_name", ""), ("primary_color", "#0f5b46"), ("background_color", "#10517A"),
-        ("text_color", "#f7f3ea"), ("logo_path", ""), ("background_image_path", ""), ("username", "admin")
-    ] { write_default_setting(conn, key, value)?; }
+    for (key, value) in [("dietitian_name", ""), ("clinic_name", ""), ("primary_color", "#0f5b46"), ("background_color", "#10517A"), ("text_color", "#f7f3ea"), ("logo_path", ""), ("background_image_path", ""), ("username", "admin")] { write_default_setting(conn, key, value)?; }
     write_default_setting(conn, "password_hash", &hash_password("admin"))?;
     Ok(())
 }
 
 fn migrate_legacy_records(conn: &Connection) -> Result<(), String> {
-    conn.execute(
-        "INSERT OR IGNORE INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, legacy_record_id, created_at, updated_at)
-         SELECT client_id, record_date, '', 'completed', 'رکورد قدیمی', notes, '', 0, '', '', '', 0, id, created_at, updated_at FROM client_records",
-        []
-    ).map_err(|err| format!("مهاجرت رکوردهای قدیمی به ویزیت انجام نشد: {err}"))?;
-    conn.execute(
-        "INSERT OR IGNORE INTO visit_measurements (visit_id, weight_kg, height_cm, bmi_snapshot, notes, created_at, updated_at)
-         SELECT visits.id, client_records.weight_kg, client_records.height_cm,
-         CASE WHEN client_records.height_cm > 0 THEN client_records.weight_kg / ((client_records.height_cm/100.0)*(client_records.height_cm/100.0)) ELSE NULL END,
-         client_records.notes, client_records.created_at, client_records.updated_at
-         FROM client_records JOIN visits ON visits.legacy_record_id = client_records.id",
-        []
-    ).map_err(|err| format!("مهاجرت اندازه‌گیری‌های قدیمی انجام نشد: {err}"))?;
+    conn.execute("INSERT OR IGNORE INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, legacy_record_id, created_at, updated_at) SELECT client_id, record_date, '', 'completed', 'رکورد قدیمی', notes, '', 0, '', '', '', 0, id, created_at, updated_at FROM client_records", []).map_err(|err| format!("مهاجرت رکوردهای قدیمی به ویزیت انجام نشد: {err}"))?;
+    conn.execute("INSERT OR IGNORE INTO visit_measurements (visit_id, weight_kg, height_cm, bmi_snapshot, notes, created_at, updated_at) SELECT visits.id, client_records.weight_kg, client_records.height_cm, CASE WHEN client_records.height_cm > 0 THEN client_records.weight_kg / ((client_records.height_cm/100.0)*(client_records.height_cm/100.0)) ELSE NULL END, client_records.notes, client_records.created_at, client_records.updated_at FROM client_records JOIN visits ON visits.legacy_record_id = client_records.id", []).map_err(|err| format!("مهاجرت اندازه‌گیری‌های قدیمی انجام نشد: {err}"))?;
     Ok(())
 }
 
-fn client_columns() -> &'static str {
-    "id, full_name, gender, age, height_cm, weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path"
-}
-fn row_to_client(row: &rusqlite::Row<'_>) -> rusqlite::Result<Client> {
-    Ok(Client { id: row.get(0)?, full_name: row.get(1)?, gender: row.get(2)?, age: row.get(3)?, height_cm: row.get(4)?, weight_kg: row.get(5)?, activity_level: row.get(6)?, goal: row.get(7)?, notes: row.get(8)?, archived: row.get::<_, i64>(9)? == 1, created_at: row.get(10)?, updated_at: row.get(11)?, phone: row.get(12)?, email: row.get(13)?, profile_image_path: row.get(14)? })
-}
-fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClientRecord> {
-    Ok(ClientRecord { id: row.get(0)?, client_id: row.get(1)?, record_date: row.get(2)?, weight_kg: row.get(3)?, height_cm: row.get(4)?, notes: row.get(5)?, created_at: row.get(6)?, updated_at: row.get(7)? })
-}
-fn row_to_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visit> {
-    Ok(Visit { id: row.get(0)?, client_id: row.get(1)?, visit_date: row.get(2)?, visit_time: row.get(3)?, status: row.get(4)?, reason: row.get(5)?, clinical_notes: row.get(6)?, private_notes: row.get(7)?, next_visit_enabled: row.get::<_, i64>(8)? == 1, next_visit_date: row.get(9)?, next_visit_time: row.get(10)?, next_visit_status: row.get(11)?, total_fee: row.get(12)?, created_at: row.get(13)?, updated_at: row.get(14)? })
-}
-fn row_to_measurements(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitMeasurements> {
-    Ok(VisitMeasurements { id: row.get(0)?, visit_id: row.get(1)?, weight_kg: row.get(2)?, height_cm: row.get(3)?, bmi_snapshot: row.get(4)?, body_fat_percent: row.get(5)?, muscle_mass: row.get(6)?, visceral_fat: row.get(7)?, waist_cm: row.get(8)?, abdomen_cm: row.get(9)?, hip_cm: row.get(10)?, chest_cm: row.get(11)?, arm_cm: row.get(12)?, thigh_cm: row.get(13)?, calf_cm: row.get(14)?, neck_cm: row.get(15)?, custom_measurements_json: row.get(16)?, notes: row.get(17)?, created_at: row.get(18)?, updated_at: row.get(19)? })
-}
-fn row_to_visit_service(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitService> {
-    Ok(VisitService { id: row.get(0)?, visit_id: row.get(1)?, service_id: row.get(2)?, service_name_snapshot: row.get(3)?, body_area: row.get(4)?, device_name: row.get(5)?, duration_minutes: row.get(6)?, price: row.get(7)?, quantity: row.get(8)?, total: row.get(9)?, notes: row.get(10)? })
-}
-fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> {
-    Ok(Attachment { id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, category: row.get(3)?, title: row.get(4)?, file_name: row.get(5)?, local_path: row.get(6)?, attachment_date: row.get(7)?, notes: row.get(8)?, created_at: row.get(9)? })
-}
-fn row_to_service_catalog_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServiceCatalogItem> {
-    Ok(ServiceCatalogItem { id: row.get(0)?, name: row.get(1)?, default_price: row.get(2)?, default_duration_minutes: row.get(3)?, body_area_required: row.get::<_, i64>(4)? == 1, active: row.get::<_, i64>(5)? == 1 })
-}
+fn client_columns() -> &'static str { "id, full_name, gender, age, height_cm, weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path" }
+fn row_to_client(row: &rusqlite::Row<'_>) -> rusqlite::Result<Client> { Ok(Client { id: row.get(0)?, full_name: row.get(1)?, gender: row.get(2)?, age: row.get(3)?, height_cm: row.get(4)?, weight_kg: row.get(5)?, activity_level: row.get(6)?, goal: row.get(7)?, notes: row.get(8)?, archived: row.get::<_, i64>(9)? == 1, created_at: row.get(10)?, updated_at: row.get(11)?, phone: row.get(12)?, email: row.get(13)?, profile_image_path: row.get(14)? }) }
+fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClientRecord> { Ok(ClientRecord { id: row.get(0)?, client_id: row.get(1)?, record_date: row.get(2)?, weight_kg: row.get(3)?, height_cm: row.get(4)?, notes: row.get(5)?, created_at: row.get(6)?, updated_at: row.get(7)? }) }
+fn row_to_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visit> { Ok(Visit { id: row.get(0)?, client_id: row.get(1)?, visit_date: row.get(2)?, visit_time: row.get(3)?, status: row.get(4)?, reason: row.get(5)?, clinical_notes: row.get(6)?, private_notes: row.get(7)?, next_visit_enabled: row.get::<_, i64>(8)? == 1, next_visit_date: row.get(9)?, next_visit_time: row.get(10)?, next_visit_status: row.get(11)?, total_fee: row.get(12)?, created_at: row.get(13)?, updated_at: row.get(14)? }) }
+fn row_to_measurements(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitMeasurements> { Ok(VisitMeasurements { id: row.get(0)?, visit_id: row.get(1)?, weight_kg: row.get(2)?, height_cm: row.get(3)?, bmi_snapshot: row.get(4)?, body_fat_percent: row.get(5)?, muscle_mass: row.get(6)?, visceral_fat: row.get(7)?, waist_cm: row.get(8)?, abdomen_cm: row.get(9)?, hip_cm: row.get(10)?, chest_cm: row.get(11)?, arm_cm: row.get(12)?, thigh_cm: row.get(13)?, calf_cm: row.get(14)?, neck_cm: row.get(15)?, custom_measurements_json: row.get(16)?, notes: row.get(17)?, created_at: row.get(18)?, updated_at: row.get(19)? }) }
+fn row_to_visit_service(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitService> { Ok(VisitService { id: row.get(0)?, visit_id: row.get(1)?, service_id: row.get(2)?, service_name_snapshot: row.get(3)?, body_area: row.get(4)?, device_name: row.get(5)?, duration_minutes: row.get(6)?, price: row.get(7)?, quantity: row.get(8)?, total: row.get(9)?, notes: row.get(10)? }) }
+fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> { Ok(Attachment { id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, category: row.get(3)?, title: row.get(4)?, file_name: row.get(5)?, local_path: row.get(6)?, attachment_date: row.get(7)?, notes: row.get(8)?, created_at: row.get(9)? }) }
+fn row_to_service_catalog_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServiceCatalogItem> { Ok(ServiceCatalogItem { id: row.get(0)?, name: row.get(1)?, default_price: row.get(2)?, default_duration_minutes: row.get(3)?, body_area_required: row.get::<_, i64>(4)? == 1, active: row.get::<_, i64>(5)? == 1 }) }
 
-fn get_client(conn: &Connection, id: i64) -> Result<Client, String> {
-    let sql = format!("SELECT {} FROM clients WHERE id=?1", client_columns());
-    conn.query_row(&sql, params![id], row_to_client).optional().map_err(|err| err.to_string())?.ok_or_else(|| "مراجع پیدا نشد.".to_string())
-}
-fn get_visit(conn: &Connection, id: i64) -> Result<Visit, String> {
-    conn.query_row("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits WHERE id=?1", params![id], row_to_visit).optional().map_err(|err| err.to_string())?.ok_or_else(|| "ویزیت پیدا نشد.".to_string())
-}
-fn get_measurements_for_visit(conn: &Connection, visit_id: i64) -> Result<Option<VisitMeasurements>, String> {
-    conn.query_row("SELECT id, visit_id, weight_kg, height_cm, bmi_snapshot, body_fat_percent, muscle_mass, visceral_fat, waist_cm, abdomen_cm, hip_cm, chest_cm, arm_cm, thigh_cm, calf_cm, neck_cm, custom_measurements_json, notes, created_at, updated_at FROM visit_measurements WHERE visit_id=?1", params![visit_id], row_to_measurements).optional().map_err(|err| err.to_string())
-}
-fn get_visit_detail_inner(conn: &Connection, id: i64) -> Result<VisitDetail, String> {
-    Ok(VisitDetail { visit: get_visit(conn, id)?, measurements: get_measurements_for_visit(conn, id)? })
-}
+fn get_client(conn: &Connection, id: i64) -> Result<Client, String> { let sql = format!("SELECT {} FROM clients WHERE id=?1", client_columns()); conn.query_row(&sql, params![id], row_to_client).optional().map_err(|err| err.to_string())?.ok_or_else(|| "مراجع پیدا نشد.".to_string()) }
+fn get_visit(conn: &Connection, id: i64) -> Result<Visit, String> { conn.query_row("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits WHERE id=?1", params![id], row_to_visit).optional().map_err(|err| err.to_string())?.ok_or_else(|| "ویزیت پیدا نشد.".to_string()) }
+fn get_measurements_for_visit(conn: &Connection, visit_id: i64) -> Result<Option<VisitMeasurements>, String> { conn.query_row("SELECT id, visit_id, weight_kg, height_cm, bmi_snapshot, body_fat_percent, muscle_mass, visceral_fat, waist_cm, abdomen_cm, hip_cm, chest_cm, arm_cm, thigh_cm, calf_cm, neck_cm, custom_measurements_json, notes, created_at, updated_at FROM visit_measurements WHERE visit_id=?1", params![visit_id], row_to_measurements).optional().map_err(|err| err.to_string()) }
+fn get_visit_detail_inner(conn: &Connection, id: i64) -> Result<VisitDetail, String> { Ok(VisitDetail { visit: get_visit(conn, id)?, measurements: get_measurements_for_visit(conn, id)? }) }
 
 #[tauri::command]
 fn list_clients(state: tauri::State<'_, AppState>, include_archived: bool) -> Result<Vec<Client>, String> {
@@ -374,7 +278,6 @@ fn list_clients(state: tauri::State<'_, AppState>, include_archived: bool) -> Re
     let mapped = stmt.query_map([], row_to_client).map_err(|err| err.to_string())?;
     mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())
 }
-
 #[tauri::command]
 fn list_clients_by_goal(state: tauri::State<'_, AppState>, goal: String) -> Result<Vec<Client>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
@@ -383,7 +286,6 @@ fn list_clients_by_goal(state: tauri::State<'_, AppState>, goal: String) -> Resu
     let mapped = stmt.query_map(params![goal], row_to_client).map_err(|err| err.to_string())?;
     mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())
 }
-
 #[tauri::command]
 fn search_clients(state: tauri::State<'_, AppState>, query: String) -> Result<Vec<Client>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
@@ -393,7 +295,6 @@ fn search_clients(state: tauri::State<'_, AppState>, query: String) -> Result<Ve
     let mapped = stmt.query_map(params![like], row_to_client).map_err(|err| err.to_string())?;
     mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())
 }
-
 #[tauri::command]
 fn save_client(state: tauri::State<'_, AppState>, client: Client) -> Result<Client, String> {
     validate_client_input(&client)?;
@@ -407,22 +308,10 @@ fn save_client(state: tauri::State<'_, AppState>, client: Client) -> Result<Clie
         get_client(&conn, conn.last_insert_rowid())
     }
 }
-
 #[tauri::command]
-fn archive_client(state: tauri::State<'_, AppState>, id: i64, archived: bool) -> Result<(), String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    conn.execute("UPDATE clients SET archived=?1, updated_at=?2 WHERE id=?3", params![if archived {1} else {0}, now(), id]).map_err(|err| err.to_string())?;
-    Ok(())
-}
-
+fn archive_client(state: tauri::State<'_, AppState>, id: i64, archived: bool) -> Result<(), String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; conn.execute("UPDATE clients SET archived=?1, updated_at=?2 WHERE id=?3", params![if archived {1} else {0}, now(), id]).map_err(|err| err.to_string())?; Ok(()) }
 #[tauri::command]
-fn list_client_records(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<ClientRecord>, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records WHERE client_id=?1 ORDER BY record_date ASC, id ASC").map_err(|err| err.to_string())?;
-    let mapped = stmt.query_map(params![client_id], row_to_record).map_err(|err| err.to_string())?;
-    mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())
-}
-
+fn list_client_records(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<ClientRecord>, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; let mut stmt = conn.prepare("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records WHERE client_id=?1 ORDER BY record_date ASC, id ASC").map_err(|err| err.to_string())?; let mapped = stmt.query_map(params![client_id], row_to_record).map_err(|err| err.to_string())?; mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string()) }
 #[tauri::command]
 fn save_client_record(state: tauri::State<'_, AppState>, record: ClientRecord) -> Result<ClientRecord, String> {
     if !is_valid_iso_date(&record.record_date) { return Err("تاریخ رکورد معتبر نیست.".to_string()); }
@@ -430,13 +319,7 @@ fn save_client_record(state: tauri::State<'_, AppState>, record: ClientRecord) -
     if !(40.0..=250.0).contains(&record.height_cm) { return Err("قد رکورد باید عددی بین ۴۰ تا ۲۵۰ سانتی‌متر باشد.".to_string()); }
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let timestamp = now();
-    let id = if let Some(id) = record.id {
-        conn.execute("UPDATE client_records SET record_date=?1, weight_kg=?2, height_cm=?3, notes=?4, updated_at=?5 WHERE id=?6", params![record.record_date, record.weight_kg, record.height_cm, record.notes, timestamp, id]).map_err(|err| err.to_string())?;
-        id
-    } else {
-        conn.execute("INSERT INTO client_records (client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![record.client_id, record.record_date, record.weight_kg, record.height_cm, record.notes, timestamp]).map_err(|err| err.to_string())?;
-        conn.last_insert_rowid()
-    };
+    let id = if let Some(id) = record.id { conn.execute("UPDATE client_records SET record_date=?1, weight_kg=?2, height_cm=?3, notes=?4, updated_at=?5 WHERE id=?6", params![record.record_date, record.weight_kg, record.height_cm, record.notes, timestamp, id]).map_err(|err| err.to_string())?; id } else { conn.execute("INSERT INTO client_records (client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![record.client_id, record.record_date, record.weight_kg, record.height_cm, record.notes, timestamp]).map_err(|err| err.to_string())?; conn.last_insert_rowid() };
     conn.query_row("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records WHERE id=?1", params![id], row_to_record).map_err(|err| err.to_string())
 }
 
@@ -446,19 +329,10 @@ fn list_client_visits(state: tauri::State<'_, AppState>, client_id: i64) -> Resu
     let mut stmt = conn.prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits WHERE client_id=?1 ORDER BY visit_date ASC, visit_time ASC, id ASC").map_err(|err| err.to_string())?;
     let mapped = stmt.query_map(params![client_id], row_to_visit).map_err(|err| err.to_string())?;
     let visits = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    visits.into_iter().map(|visit| {
-        let visit_id = visit.id.ok_or_else(|| "شناسه ویزیت معتبر نیست.".to_string())?;
-        let measurements = get_measurements_for_visit(&conn, visit_id)?;
-        Ok(VisitDetail { visit, measurements })
-    }).collect()
+    visits.into_iter().map(|visit| { let visit_id = visit.id.ok_or_else(|| "شناسه ویزیت معتبر نیست.".to_string())?; let measurements = get_measurements_for_visit(&conn, visit_id)?; Ok(VisitDetail { visit, measurements }) }).collect()
 }
-
 #[tauri::command]
-fn get_visit_detail(state: tauri::State<'_, AppState>, id: i64) -> Result<VisitDetail, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    get_visit_detail_inner(&conn, id)
-}
-
+fn get_visit_detail(state: tauri::State<'_, AppState>, id: i64) -> Result<VisitDetail, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; get_visit_detail_inner(&conn, id) }
 #[tauri::command]
 fn save_visit_with_measurements(state: tauri::State<'_, AppState>, visit: Visit, measurements: Option<VisitMeasurements>) -> Result<VisitDetail, String> {
     validate_visit_input(&visit)?;
@@ -466,17 +340,10 @@ fn save_visit_with_measurements(state: tauri::State<'_, AppState>, visit: Visit,
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     get_client(&conn, visit.client_id)?;
     let timestamp = now();
-    let visit_id = if let Some(id) = visit.id {
-        conn.execute("UPDATE visits SET visit_date=?1, visit_time=?2, status=?3, reason=?4, clinical_notes=?5, private_notes=?6, next_visit_enabled=?7, next_visit_date=?8, next_visit_time=?9, next_visit_status=?10, total_fee=?11, updated_at=?12 WHERE id=?13", params![visit.visit_date, visit.visit_time, visit.status, visit.reason, visit.clinical_notes, visit.private_notes, if visit.next_visit_enabled {1} else {0}, if visit.next_visit_enabled {visit.next_visit_date} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_time} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_status} else {String::new()}, visit.total_fee, timestamp, id]).map_err(|err| err.to_string())?;
-        id
-    } else {
-        conn.execute("INSERT INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)", params![visit.client_id, visit.visit_date, visit.visit_time, visit.status, visit.reason, visit.clinical_notes, visit.private_notes, if visit.next_visit_enabled {1} else {0}, if visit.next_visit_enabled {visit.next_visit_date} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_time} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_status} else {String::new()}, visit.total_fee, timestamp]).map_err(|err| err.to_string())?;
-        conn.last_insert_rowid()
-    };
+    let visit_id = if let Some(id) = visit.id { conn.execute("UPDATE visits SET visit_date=?1, visit_time=?2, status=?3, reason=?4, clinical_notes=?5, private_notes=?6, next_visit_enabled=?7, next_visit_date=?8, next_visit_time=?9, next_visit_status=?10, total_fee=?11, updated_at=?12 WHERE id=?13", params![visit.visit_date, visit.visit_time, visit.status, visit.reason, visit.clinical_notes, visit.private_notes, if visit.next_visit_enabled {1} else {0}, if visit.next_visit_enabled {visit.next_visit_date} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_time} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_status} else {String::new()}, visit.total_fee, timestamp, id]).map_err(|err| err.to_string())?; id } else { conn.execute("INSERT INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)", params![visit.client_id, visit.visit_date, visit.visit_time, visit.status, visit.reason, visit.clinical_notes, visit.private_notes, if visit.next_visit_enabled {1} else {0}, if visit.next_visit_enabled {visit.next_visit_date} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_time} else {String::new()}, if visit.next_visit_enabled {visit.next_visit_status} else {String::new()}, visit.total_fee, timestamp]).map_err(|err| err.to_string())?; conn.last_insert_rowid() };
     if let Some(mut m) = measurements { m.visit_id = Some(visit_id); save_visit_measurements_inner(&conn, m)?; }
     get_visit_detail_inner(&conn, visit_id)
 }
-
 fn save_visit_measurements_inner(conn: &Connection, measurements: VisitMeasurements) -> Result<VisitMeasurements, String> {
     validate_measurements_input(&measurements)?;
     let visit_id = measurements.visit_id.ok_or_else(|| "شناسه ویزیت برای اندازه‌گیری لازم است.".to_string())?;
@@ -487,12 +354,8 @@ fn save_visit_measurements_inner(conn: &Connection, measurements: VisitMeasureme
     conn.execute("INSERT INTO client_records (client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at) SELECT ?1, ?2, ?3, COALESCE(?4,0), ?5, ?6, ?6 WHERE NOT EXISTS (SELECT 1 FROM visits WHERE visits.legacy_record_id IS NOT NULL AND visits.id=?7)", params![visit.client_id, visit.visit_date, measurements.weight_kg, measurements.height_cm, measurements.notes, timestamp, visit_id]).map_err(|err| err.to_string())?;
     get_measurements_for_visit(conn, visit_id)?.ok_or_else(|| "اندازه‌گیری ویزیت ذخیره نشد.".to_string())
 }
-
 #[tauri::command]
-fn save_visit_measurements(state: tauri::State<'_, AppState>, measurements: VisitMeasurements) -> Result<VisitMeasurements, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    save_visit_measurements_inner(&conn, measurements)
-}
+fn save_visit_measurements(state: tauri::State<'_, AppState>, measurements: VisitMeasurements) -> Result<VisitMeasurements, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; save_visit_measurements_inner(&conn, measurements) }
 
 #[tauri::command]
 fn save_visit_service(state: tauri::State<'_, AppState>, service: VisitService) -> Result<VisitService, String> {
@@ -500,31 +363,13 @@ fn save_visit_service(state: tauri::State<'_, AppState>, service: VisitService) 
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     get_visit(&conn, service.visit_id)?;
     let total = if service.total > 0.0 { service.total } else { service.price * service.quantity.max(1.0) };
-    let id = if let Some(id) = service.id {
-        conn.execute("UPDATE visit_services SET service_id=?1, service_name_snapshot=?2, body_area=?3, device_name=?4, duration_minutes=?5, price=?6, quantity=?7, total=?8, notes=?9 WHERE id=?10", params![service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity, total, service.notes, id]).map_err(|err| err.to_string())?;
-        id
-    } else {
-        conn.execute("INSERT INTO visit_services (visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![service.visit_id, service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes, now()]).map_err(|err| err.to_string())?;
-        conn.last_insert_rowid()
-    };
+    let id = if let Some(id) = service.id { conn.execute("UPDATE visit_services SET service_id=?1, service_name_snapshot=?2, body_area=?3, device_name=?4, duration_minutes=?5, price=?6, quantity=?7, total=?8, notes=?9 WHERE id=?10", params![service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity, total, service.notes, id]).map_err(|err| err.to_string())?; id } else { conn.execute("INSERT INTO visit_services (visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)", params![service.visit_id, service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes, now()]).map_err(|err| err.to_string())?; conn.last_insert_rowid() };
     conn.query_row("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE id=?1", params![id], row_to_visit_service).map_err(|err| err.to_string())
 }
-
 #[tauri::command]
-fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Result<Vec<VisitService>, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC").map_err(|err| err.to_string())?;
-    let mapped = stmt.query_map(params![visit_id], row_to_visit_service).map_err(|err| err.to_string())?;
-    let items = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    Ok(items)
-}
+fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Result<Vec<VisitService>, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; let mut stmt = conn.prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC").map_err(|err| err.to_string())?; let mapped = stmt.query_map(params![visit_id], row_to_visit_service).map_err(|err| err.to_string())?; let items = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?; Ok(items) }
 
-fn client_folder(state: &AppState, client_id: i64) -> Result<PathBuf, String> {
-    let base = state.db_path.parent().ok_or_else(|| "مسیر داده‌های برنامه پیدا نشد.".to_string())?.join("DietoyData").join("clients").join(format!("client-{client_id:06}"));
-    fs::create_dir_all(&base).map_err(|err| format!("ساخت پوشه مراجعه‌کننده انجام نشد: {err}"))?;
-    Ok(base)
-}
-
+fn client_folder(state: &AppState, client_id: i64) -> Result<PathBuf, String> { let base = state.db_path.parent().ok_or_else(|| "مسیر داده‌های برنامه پیدا نشد.".to_string())?.join("DietoyData").join("clients").join(format!("client-{client_id:06}")); fs::create_dir_all(&base).map_err(|err| format!("ساخت پوشه مراجعه‌کننده انجام نشد: {err}"))?; Ok(base) }
 #[tauri::command]
 fn import_visit_attachment(state: tauri::State<'_, AppState>, source_path: String, mut attachment: Attachment) -> Result<Attachment, String> {
     let source = PathBuf::from(&source_path);
@@ -545,21 +390,10 @@ fn import_visit_attachment(state: tauri::State<'_, AppState>, source_path: Strin
     let id = conn.last_insert_rowid();
     conn.query_row("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE id=?1", params![id], row_to_attachment).map_err(|err| err.to_string())
 }
-
 #[tauri::command]
-fn import_attachment(state: tauri::State<'_, AppState>, client_id: i64, visit_id: Option<i64>, path: String, category: String, title: String, attachment_date: String, notes: String) -> Result<Attachment, String> {
-    import_visit_attachment(state, path, Attachment { id: None, client_id, visit_id, category, title, file_name: String::new(), local_path: String::new(), attachment_date, notes, created_at: None })
-}
-
+fn import_attachment(state: tauri::State<'_, AppState>, client_id: i64, visit_id: Option<i64>, path: String, category: String, title: String, attachment_date: String, notes: String) -> Result<Attachment, String> { import_visit_attachment(state, path, Attachment { id: None, client_id, visit_id, category, title, file_name: String::new(), local_path: String::new(), attachment_date, notes, created_at: None }) }
 #[tauri::command]
-fn list_client_attachments(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<Attachment>, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC").map_err(|err| err.to_string())?;
-    let mapped = stmt.query_map(params![client_id], row_to_attachment).map_err(|err| err.to_string())?;
-    let attachments = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    Ok(attachments)
-}
-
+fn list_client_attachments(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<Attachment>, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; let mut stmt = conn.prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC").map_err(|err| err.to_string())?; let mapped = stmt.query_map(params![client_id], row_to_attachment).map_err(|err| err.to_string())?; let attachments = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?; Ok(attachments) }
 #[tauri::command]
 fn list_attachments(state: tauri::State<'_, AppState>, client_id: i64, category: Option<String>) -> Result<Vec<Attachment>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
@@ -567,151 +401,54 @@ fn list_attachments(state: tauri::State<'_, AppState>, client_id: i64, category:
         let mut stmt = conn.prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 AND category=?2 ORDER BY attachment_date DESC, id DESC").map_err(|err| err.to_string())?;
         let mapped = stmt.query_map(params![client_id, category], row_to_attachment).map_err(|err| err.to_string())?;
         mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())
-    } else { list_client_attachments(state, client_id) }
+    } else {
+        let mut stmt = conn.prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC").map_err(|err| err.to_string())?;
+        let mapped = stmt.query_map(params![client_id], row_to_attachment).map_err(|err| err.to_string())?;
+        mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())
+    }
 }
 
-fn open_path_with_system(path: PathBuf) -> Result<(), String> {
-    if !path.exists() { return Err("مسیر موردنظر پیدا نشد.".to_string()); }
-    #[cfg(target_os="windows")]
-    { Command::new("cmd").args(["/C", "start", ""]).arg(path.to_string_lossy().to_string()).spawn().map_err(|err| format!("باز کردن مسیر انجام نشد: {err}"))?; }
-    #[cfg(target_os="macos")]
-    { Command::new("open").arg(&path).spawn().map_err(|err| format!("باز کردن مسیر انجام نشد: {err}"))?; }
-    #[cfg(all(unix, not(target_os="macos")))]
-    { Command::new("xdg-open").arg(&path).spawn().map_err(|err| format!("باز کردن مسیر انجام نشد: {err}"))?; }
-    Ok(())
-}
+fn open_path_with_system(path: PathBuf) -> Result<(), String> { if !path.exists() { return Err("مسیر موردنظر پیدا نشد.".to_string()); } #[cfg(target_os="windows")] { Command::new("cmd").args(["/C", "start", ""]).arg(path.to_string_lossy().to_string()).spawn().map_err(|err| format!("باز کردن مسیر انجام نشد: {err}"))?; } #[cfg(target_os="macos")] { Command::new("open").arg(&path).spawn().map_err(|err| format!("باز کردن مسیر انجام نشد: {err}"))?; } #[cfg(all(unix, not(target_os="macos")))] { Command::new("xdg-open").arg(&path).spawn().map_err(|err| format!("باز کردن مسیر انجام نشد: {err}"))?; } Ok(()) }
 #[tauri::command]
 fn open_client_folder(state: tauri::State<'_, AppState>, client_id: i64) -> Result<(), String> { open_path_with_system(client_folder(&state, client_id)?) }
 #[tauri::command]
-fn open_attachment(state: tauri::State<'_, AppState>, attachment_id: i64) -> Result<(), String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let path: String = conn.query_row("SELECT local_path FROM attachments WHERE id=?1", params![attachment_id], |row| row.get(0)).optional().map_err(|err| err.to_string())?.ok_or_else(|| "فایل پیوست پیدا نشد.".to_string())?;
-    open_path_with_system(PathBuf::from(path))
-}
+fn open_attachment(state: tauri::State<'_, AppState>, attachment_id: i64) -> Result<(), String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; let path: String = conn.query_row("SELECT local_path FROM attachments WHERE id=?1", params![attachment_id], |row| row.get(0)).optional().map_err(|err| err.to_string())?.ok_or_else(|| "فایل پیوست پیدا نشد.".to_string())?; open_path_with_system(PathBuf::from(path)) }
 
 #[tauri::command]
-fn list_service_catalog(state: tauri::State<'_, AppState>, active_only: bool) -> Result<Vec<ServiceCatalogItem>, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let sql = if active_only { "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE active=1 ORDER BY name ASC" } else { "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog ORDER BY active DESC, name ASC" };
-    let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
-    let mapped = stmt.query_map([], row_to_service_catalog_item).map_err(|err| err.to_string())?;
-    mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())
-}
+fn list_service_catalog(state: tauri::State<'_, AppState>, active_only: bool) -> Result<Vec<ServiceCatalogItem>, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; let sql = if active_only { "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE active=1 ORDER BY name ASC" } else { "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog ORDER BY active DESC, name ASC" }; let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?; let mapped = stmt.query_map([], row_to_service_catalog_item).map_err(|err| err.to_string())?; mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string()) }
 #[tauri::command]
-fn save_service_catalog_item(state: tauri::State<'_, AppState>, item: ServiceCatalogItem) -> Result<ServiceCatalogItem, String> {
-    if item.name.trim().is_empty() { return Err("نام خدمت الزامی است.".to_string()); }
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let id = if let Some(id) = item.id {
-        conn.execute("UPDATE service_catalog SET name=?1, default_price=?2, default_duration_minutes=?3, body_area_required=?4, active=?5, updated_at=?6 WHERE id=?7", params![item.name, item.default_price, item.default_duration_minutes, if item.body_area_required {1} else {0}, if item.active {1} else {0}, now(), id]).map_err(|err| err.to_string())?;
-        id
-    } else {
-        conn.execute("INSERT INTO service_catalog (name, default_price, default_duration_minutes, body_area_required, active, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![item.name, item.default_price, item.default_duration_minutes, if item.body_area_required {1} else {0}, if item.active {1} else {0}, now()]).map_err(|err| err.to_string())?;
-        conn.last_insert_rowid()
-    };
-    conn.query_row("SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE id=?1", params![id], row_to_service_catalog_item).map_err(|err| err.to_string())
-}
-
+fn save_service_catalog_item(state: tauri::State<'_, AppState>, item: ServiceCatalogItem) -> Result<ServiceCatalogItem, String> { if item.name.trim().is_empty() { return Err("نام خدمت الزامی است.".to_string()); } let conn = state.conn.lock().map_err(|err| err.to_string())?; let id = if let Some(id) = item.id { conn.execute("UPDATE service_catalog SET name=?1, default_price=?2, default_duration_minutes=?3, body_area_required=?4, active=?5, updated_at=?6 WHERE id=?7", params![item.name, item.default_price, item.default_duration_minutes, if item.body_area_required {1} else {0}, if item.active {1} else {0}, now(), id]).map_err(|err| err.to_string())?; id } else { conn.execute("INSERT INTO service_catalog (name, default_price, default_duration_minutes, body_area_required, active, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?6)", params![item.name, item.default_price, item.default_duration_minutes, if item.body_area_required {1} else {0}, if item.active {1} else {0}, now()]).map_err(|err| err.to_string())?; conn.last_insert_rowid() }; conn.query_row("SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE id=?1", params![id], row_to_service_catalog_item).map_err(|err| err.to_string()) }
 #[tauri::command]
-fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let total_clients: i64 = conn.query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0)).map_err(|err| err.to_string())?;
-    let active_clients: i64 = conn.query_row("SELECT COUNT(*) FROM clients WHERE archived=0", [], |row| row.get(0)).map_err(|err| err.to_string())?;
-    let sql = format!("SELECT {} FROM clients WHERE archived=0 ORDER BY updated_at DESC LIMIT 5", client_columns());
-    let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
-    let mapped = stmt.query_map([], row_to_client).map_err(|err| err.to_string())?;
-    let recent_clients = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    Ok(DashboardStats { total_clients, active_clients, recent_clients })
-}
-
+fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; let total_clients: i64 = conn.query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0)).map_err(|err| err.to_string())?; let active_clients: i64 = conn.query_row("SELECT COUNT(*) FROM clients WHERE archived=0", [], |row| row.get(0)).map_err(|err| err.to_string())?; let sql = format!("SELECT {} FROM clients WHERE archived=0 ORDER BY updated_at DESC LIMIT 5", client_columns()); let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?; let mapped = stmt.query_map([], row_to_client).map_err(|err| err.to_string())?; let recent_clients = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?; Ok(DashboardStats { total_clients, active_clients, recent_clients }) }
 #[tauri::command]
-fn get_settings(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    Ok(Settings { dietitian_name: read_setting(&conn, "dietitian_name")?, clinic_name: read_setting(&conn, "clinic_name")?, primary_color: read_setting(&conn, "primary_color")?, background_color: read_setting(&conn, "background_color")?, text_color: read_setting(&conn, "text_color")?, logo_path: read_setting(&conn, "logo_path")?, background_image_path: read_setting(&conn, "background_image_path")?, username: read_setting(&conn, "username")? })
-}
+fn get_settings(state: tauri::State<'_, AppState>) -> Result<Settings, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; Ok(Settings { dietitian_name: read_setting(&conn, "dietitian_name")?, clinic_name: read_setting(&conn, "clinic_name")?, primary_color: read_setting(&conn, "primary_color")?, background_color: read_setting(&conn, "background_color")?, text_color: read_setting(&conn, "text_color")?, logo_path: read_setting(&conn, "logo_path")?, background_image_path: read_setting(&conn, "background_image_path")?, username: read_setting(&conn, "username")? }) }
 #[tauri::command]
-fn save_settings(state: tauri::State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    for (key, value) in [("dietitian_name", settings.dietitian_name.as_str()), ("clinic_name", settings.clinic_name.as_str()), ("primary_color", settings.primary_color.as_str()), ("background_color", settings.background_color.as_str()), ("text_color", settings.text_color.as_str()), ("logo_path", settings.logo_path.as_str()), ("background_image_path", settings.background_image_path.as_str()), ("username", settings.username.as_str())] { write_setting(&conn, key, value)?; }
-    Ok(settings)
-}
-
+fn save_settings(state: tauri::State<'_, AppState>, settings: Settings) -> Result<Settings, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; for (key, value) in [("dietitian_name", settings.dietitian_name.as_str()), ("clinic_name", settings.clinic_name.as_str()), ("primary_color", settings.primary_color.as_str()), ("background_color", settings.background_color.as_str()), ("text_color", settings.text_color.as_str()), ("logo_path", settings.logo_path.as_str()), ("background_image_path", settings.background_image_path.as_str()), ("username", settings.username.as_str())] { write_setting(&conn, key, value)?; } Ok(settings) }
 #[tauri::command]
-fn import_brand_asset(state: tauri::State<'_, AppState>, path: String, kind: String) -> Result<String, String> {
-    let source = PathBuf::from(path);
-    if !source.exists() { return Err("فایل تصویر پیدا نشد.".to_string()); }
-    let extension = source.extension().and_then(|v| v.to_str()).unwrap_or("png").to_lowercase();
-    let allowed = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "svg"];
-    if !allowed.contains(&extension.as_str()) { return Err("فرمت تصویر پشتیبانی نمی‌شود.".to_string()); }
-    let stem = match kind.as_str() { "logo" => "dietoy-logo".to_string(), "background" => "dietoy-background".to_string(), "client-profile" => format!("client-profile-{}", Utc::now().timestamp_millis()), _ => return Err("نوع تصویر نامعتبر است.".to_string()) };
-    let app_dir = state.db_path.parent().ok_or_else(|| "مسیر ذخیره‌سازی برنامه پیدا نشد.".to_string())?.join("assets");
-    fs::create_dir_all(&app_dir).map_err(|err| err.to_string())?;
-    let target = app_dir.join(format!("{}.{}", stem, extension));
-    fs::copy(&source, &target).map_err(|err| err.to_string())?;
-    Ok(target.to_string_lossy().to_string())
-}
-
+fn import_brand_asset(state: tauri::State<'_, AppState>, path: String, kind: String) -> Result<String, String> { let source = PathBuf::from(path); if !source.exists() { return Err("فایل تصویر پیدا نشد.".to_string()); } let extension = source.extension().and_then(|v| v.to_str()).unwrap_or("png").to_lowercase(); let allowed = ["png", "jpg", "jpeg", "webp", "bmp", "gif", "svg"]; if !allowed.contains(&extension.as_str()) { return Err("فرمت تصویر پشتیبانی نمی‌شود.".to_string()); } let stem = match kind.as_str() { "logo" => "dietoy-logo".to_string(), "background" => "dietoy-background".to_string(), "client-profile" => format!("client-profile-{}", Utc::now().timestamp_millis()), _ => return Err("نوع تصویر نامعتبر است.".to_string()) }; let app_dir = state.db_path.parent().ok_or_else(|| "مسیر ذخیره‌سازی برنامه پیدا نشد.".to_string())?.join("assets"); fs::create_dir_all(&app_dir).map_err(|err| err.to_string())?; let target = app_dir.join(format!("{}.{}", stem, extension)); fs::copy(&source, &target).map_err(|err| err.to_string())?; Ok(target.to_string_lossy().to_string()) }
 #[tauri::command]
-fn login(state: tauri::State<'_, AppState>, input: LoginInput) -> Result<bool, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    Ok(input.username.trim() == read_setting(&conn, "username")? && hash_password(&input.password) == read_setting(&conn, "password_hash")?)
-}
+fn login(state: tauri::State<'_, AppState>, input: LoginInput) -> Result<bool, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; Ok(input.username.trim() == read_setting(&conn, "username")? && hash_password(&input.password) == read_setting(&conn, "password_hash")?) }
 #[tauri::command]
-fn change_credentials(state: tauri::State<'_, AppState>, input: CredentialsInput) -> Result<(), String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    if hash_password(&input.current_password) != read_setting(&conn, "password_hash")? { return Err("رمز فعلی درست نیست.".to_string()); }
-    if input.username.trim().is_empty() || input.password.len() < 4 { return Err("نام کاربری و رمز جدید را کامل وارد کنید.".to_string()); }
-    write_setting(&conn, "username", input.username.trim())?;
-    write_setting(&conn, "password_hash", &hash_password(&input.password))?;
-    Ok(())
-}
-
+fn change_credentials(state: tauri::State<'_, AppState>, input: CredentialsInput) -> Result<(), String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; if hash_password(&input.current_password) != read_setting(&conn, "password_hash")? { return Err("رمز فعلی درست نیست.".to_string()); } if input.username.trim().is_empty() || input.password.len() < 4 { return Err("نام کاربری و رمز جدید را کامل وارد کنید.".to_string()); } write_setting(&conn, "username", input.username.trim())?; write_setting(&conn, "password_hash", &hash_password(&input.password))?; Ok(()) }
 #[tauri::command]
-fn export_database(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let file_name = format!("nutritionist-backup-{}.sqlite", Utc::now().format("%Y%m%d-%H%M%S"));
-    let base_dir = dirs_next::document_dir().or_else(dirs_next::desktop_dir).ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?;
-    let target = base_dir.join(file_name);
-    fs::copy(&state.db_path, &target).map_err(|err| err.to_string())?;
-    Ok(target.to_string_lossy().to_string())
-}
+fn export_database(state: tauri::State<'_, AppState>) -> Result<String, String> { let file_name = format!("nutritionist-backup-{}.sqlite", Utc::now().format("%Y%m%d-%H%M%S")); let base_dir = dirs_next::document_dir().or_else(dirs_next::desktop_dir).ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?; let target = base_dir.join(file_name); fs::copy(&state.db_path, &target).map_err(|err| err.to_string())?; Ok(target.to_string_lossy().to_string()) }
 #[tauri::command]
-fn export_data_backup(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let mut clients_stmt = conn.prepare(&format!("SELECT {} FROM clients ORDER BY id ASC", client_columns())).map_err(|err| err.to_string())?;
-    let clients = clients_stmt.query_map([], row_to_client).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    let mut settings_stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key ASC").map_err(|err| err.to_string())?;
-    let settings = settings_stmt.query_map([], |row| Ok(SettingEntry { key: row.get(0)?, value: row.get(1)? })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    let mut records_stmt = conn.prepare("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records ORDER BY client_id ASC, record_date ASC, id ASC").map_err(|err| err.to_string())?;
-    let records = records_stmt.query_map([], row_to_record).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
-    let backup = DataBackup { app: "dietoy".to_string(), version: env!("CARGO_PKG_VERSION").to_string(), exported_at: now(), clients, records, visits: vec![], measurements: vec![], attachments: vec![], visit_services: vec![], service_catalog: vec![], settings };
-    let target = dirs_next::document_dir().or_else(dirs_next::desktop_dir).ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?.join(format!("dietoy-data-{}.json", Utc::now().format("%Y%m%d-%H%M%S")));
-    fs::write(&target, serde_json::to_string_pretty(&backup).map_err(|err| err.to_string())?).map_err(|err| err.to_string())?;
-    Ok(target.to_string_lossy().to_string())
-}
+fn export_data_backup(state: tauri::State<'_, AppState>) -> Result<String, String> { let conn = state.conn.lock().map_err(|err| err.to_string())?; let mut clients_stmt = conn.prepare(&format!("SELECT {} FROM clients ORDER BY id ASC", client_columns())).map_err(|err| err.to_string())?; let clients = clients_stmt.query_map([], row_to_client).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?; let mut settings_stmt = conn.prepare("SELECT key, value FROM settings ORDER BY key ASC").map_err(|err| err.to_string())?; let settings = settings_stmt.query_map([], |row| Ok(SettingEntry { key: row.get(0)?, value: row.get(1)? })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?; let mut records_stmt = conn.prepare("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records ORDER BY client_id ASC, record_date ASC, id ASC").map_err(|err| err.to_string())?; let records = records_stmt.query_map([], row_to_record).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?; let backup = DataBackup { app: "dietoy".to_string(), version: env!("CARGO_PKG_VERSION").to_string(), exported_at: now(), clients, records, visits: vec![], measurements: vec![], attachments: vec![], visit_services: vec![], service_catalog: vec![], settings }; let target = dirs_next::document_dir().or_else(dirs_next::desktop_dir).ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?.join(format!("dietoy-data-{}.json", Utc::now().format("%Y%m%d-%H%M%S"))); fs::write(&target, serde_json::to_string_pretty(&backup).map_err(|err| err.to_string())?).map_err(|err| err.to_string())?; Ok(target.to_string_lossy().to_string()) }
 #[tauri::command]
 fn export_client_backup(state: tauri::State<'_, AppState>, client_id: i64) -> Result<String, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let client = get_client(&conn, client_id)?;
-    let visits = list_client_visits(state, client_id)?;
+    let mut stmt = conn.prepare("SELECT id FROM visits WHERE client_id=?1 ORDER BY visit_date ASC, visit_time ASC, id ASC").map_err(|err| err.to_string())?;
+    let mapped = stmt.query_map(params![client_id], |row| row.get::<_, i64>(0)).map_err(|err| err.to_string())?;
+    let visit_ids = mapped.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
+    let visits = visit_ids.into_iter().map(|id| get_visit_detail_inner(&conn, id)).collect::<Result<Vec<_>, _>>()?;
     let payload = serde_json::json!({"client": client, "visits": visits, "exported_at": now()});
     let target = dirs_next::document_dir().or_else(dirs_next::desktop_dir).ok_or_else(|| "مسیر مناسب برای خروجی پیدا نشد.".to_string())?.join(format!("dietoy-client-{client_id}-{}.json", Utc::now().format("%Y%m%d-%H%M%S")));
     fs::write(&target, serde_json::to_string_pretty(&payload).map_err(|err| err.to_string())?).map_err(|err| err.to_string())?;
     Ok(target.to_string_lossy().to_string())
 }
 #[tauri::command]
-fn restore_data_backup(state: tauri::State<'_, AppState>, path: String) -> Result<(), String> {
-    let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
-    let backup: DataBackup = serde_json::from_str(&content).map_err(|err| err.to_string())?;
-    if backup.app != "dietoy" && backup.app != "matab-taghzieh" { return Err("فایل پشتیبان مربوط به این برنامه نیست.".to_string()); }
-    let mut conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let tx = conn.transaction().map_err(|err| err.to_string())?;
-    for table in ["visit_services", "attachments", "visit_measurements", "visits", "client_records", "clients", "service_catalog", "settings"] { tx.execute(&format!("DELETE FROM {}", table), []).map_err(|err| err.to_string())?; }
-    for setting in backup.settings { tx.execute("INSERT INTO settings (key, value) VALUES (?1, ?2)", params![setting.key, setting.value]).map_err(|err| err.to_string())?; }
-    for client in backup.clients { tx.execute("INSERT INTO clients (id, full_name, gender, age, height_cm, weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)", params![client.id, client.full_name, client.gender, client.age, client.height_cm, client.weight_kg, client.activity_level, client.goal, client.notes, if client.archived {1} else {0}, client.created_at.unwrap_or_else(now), client.updated_at.unwrap_or_else(now), client.phone, client.email, client.profile_image_path]).map_err(|err| err.to_string())?; }
-    for record in backup.records { tx.execute("INSERT INTO client_records (id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![record.id, record.client_id, record.record_date, record.weight_kg, record.height_cm, record.notes, record.created_at.unwrap_or_else(now), record.updated_at.unwrap_or_else(now)]).map_err(|err| err.to_string())?; }
-    tx.commit().map_err(|err| err.to_string())?;
-    init_db(&conn)?;
-    Ok(())
-}
+fn restore_data_backup(state: tauri::State<'_, AppState>, path: String) -> Result<(), String> { let content = fs::read_to_string(path).map_err(|err| err.to_string())?; let backup: DataBackup = serde_json::from_str(&content).map_err(|err| err.to_string())?; if backup.app != "dietoy" && backup.app != "matab-taghzieh" { return Err("فایل پشتیبان مربوط به این برنامه نیست.".to_string()); } let mut conn = state.conn.lock().map_err(|err| err.to_string())?; let tx = conn.transaction().map_err(|err| err.to_string())?; for table in ["visit_services", "attachments", "visit_measurements", "visits", "client_records", "clients", "service_catalog", "settings"] { tx.execute(&format!("DELETE FROM {}", table), []).map_err(|err| err.to_string())?; } for setting in backup.settings { tx.execute("INSERT INTO settings (key, value) VALUES (?1, ?2)", params![setting.key, setting.value]).map_err(|err| err.to_string())?; } for client in backup.clients { tx.execute("INSERT INTO clients (id, full_name, gender, age, height_cm, weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)", params![client.id, client.full_name, client.gender, client.age, client.height_cm, client.weight_kg, client.activity_level, client.goal, client.notes, if client.archived {1} else {0}, client.created_at.unwrap_or_else(now), client.updated_at.unwrap_or_else(now), client.phone, client.email, client.profile_image_path]).map_err(|err| err.to_string())?; } for record in backup.records { tx.execute("INSERT INTO client_records (id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![record.id, record.client_id, record.record_date, record.weight_kg, record.height_cm, record.notes, record.created_at.unwrap_or_else(now), record.updated_at.unwrap_or_else(now)]).map_err(|err| err.to_string())?; } tx.commit().map_err(|err| err.to_string())?; init_db(&conn)?; Ok(()) }
 
 #[tauri::command]
 fn save_visit(state: tauri::State<'_, AppState>, visit: Visit) -> Result<Visit, String> { Ok(save_visit_with_measurements(state, visit, None)?.visit) }
@@ -722,23 +459,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            let dir = app.path().app_data_dir()?;
-            fs::create_dir_all(&dir)?;
-            let path = dir.join("nutritionist.sqlite");
-            let conn = Connection::open(&path)?;
-            init_db(&conn).map_err(std::io::Error::other)?;
-            app.manage(AppState { conn: Mutex::new(conn), db_path: path });
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![
-            archive_client, change_credentials, dashboard_stats, export_client_backup, export_data_backup, export_database,
-            get_settings, get_visit_detail, import_attachment, import_brand_asset, import_visit_attachment, list_attachments,
-            list_client_attachments, list_client_records, list_clients, list_clients_by_goal, list_client_visits, list_service_catalog,
-            list_visit_services, list_visits, login, open_attachment, open_client_folder, restore_data_backup, save_client,
-            save_client_record, save_service_catalog_item, save_settings, save_visit, save_visit_measurements, save_visit_service,
-            save_visit_with_measurements, search_clients
-        ])
+        .setup(|app| { let dir = app.path().app_data_dir()?; fs::create_dir_all(&dir)?; let path = dir.join("nutritionist.sqlite"); let conn = Connection::open(&path)?; init_db(&conn).map_err(std::io::Error::other)?; app.manage(AppState { conn: Mutex::new(conn), db_path: path }); Ok(()) })
+        .invoke_handler(tauri::generate_handler![archive_client, change_credentials, dashboard_stats, export_client_backup, export_data_backup, export_database, get_settings, get_visit_detail, import_attachment, import_brand_asset, import_visit_attachment, list_attachments, list_client_attachments, list_client_records, list_clients, list_clients_by_goal, list_client_visits, list_service_catalog, list_visit_services, list_visits, login, open_attachment, open_client_folder, restore_data_backup, save_client, save_client_record, save_service_catalog_item, save_settings, save_visit, save_visit_measurements, save_visit_service, save_visit_with_measurements, search_clients])
         .run(tauri::generate_context!())
         .expect("failed to run app");
 }
