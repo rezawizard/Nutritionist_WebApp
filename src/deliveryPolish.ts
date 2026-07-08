@@ -1,4 +1,10 @@
+import { convertFileSrc } from "@tauri-apps/api/core";
+
 const faDigits = "۰۱۲۳۴۵۶۷۸۹";
+
+function isDesktopRuntime() {
+  return Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
+}
 
 function toFa(value: string | number) {
   return String(value).replace(/\d/g, (digit) => faDigits[Number(digit)]);
@@ -18,6 +24,39 @@ function format(value: number, digits = 0) {
     maximumFractionDigits: digits,
     minimumFractionDigits: digits,
   }).format(value).replace(/٬/g, "");
+}
+
+function maybeFilePath(src: string) {
+  return /^(?:[a-zA-Z]:\\|\\\\|\/Users\/|\/home\/|\/mnt\/|\/var\/|\/tmp\/)/.test(src) && !src.startsWith("asset://") && !src.startsWith("http") && !src.startsWith("data:");
+}
+
+function polishImages() {
+  if (!isDesktopRuntime()) return;
+  document.querySelectorAll("img").forEach((img) => {
+    const current = img.getAttribute("src") || "";
+    if (!current || !maybeFilePath(current)) return;
+    try {
+      img.src = convertFileSrc(current);
+      img.dataset.dietoyFileSrc = "true";
+    } catch {
+      // keep original src if conversion fails
+    }
+  });
+}
+
+function polishTimeInputs() {
+  const labels = Array.from(document.querySelectorAll("label"));
+  labels.forEach((label) => {
+    if (!/ساعت|زمان/.test(label.textContent || "")) return;
+    const input = (label.parentElement?.querySelector("input") || label.querySelector("input")) as HTMLInputElement | null;
+    if (!input || input.dataset.dietoyTimePicker === "true") return;
+    input.type = "time";
+    input.step = "300";
+    input.dir = "ltr";
+    input.classList.add("numbers");
+    input.dataset.dietoyTimePicker = "true";
+    if (!input.value) input.value = "09:00";
+  });
 }
 
 function findCalculatorRoot() {
@@ -121,6 +160,8 @@ function schedule() {
   scheduled = true;
   window.setTimeout(() => {
     scheduled = false;
+    polishImages();
+    polishTimeInputs();
     polishCalculator();
   }, 120);
 }
