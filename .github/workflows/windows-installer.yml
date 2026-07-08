@@ -1,5 +1,5 @@
 name: USE THIS - Dietoy Final Installer
-run-name: USE THIS - Dietoy Final Installer
+run-name: USE THIS - Dietoy Final Installer · ${{ github.ref_name }} · ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -28,9 +28,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Show project files
+      - name: Show project files and commit
         shell: pwsh
         run: |
+          git rev-parse HEAD
+          git branch --show-current
           Get-ChildItem -Force
           Get-ChildItem src-tauri -Force
           Get-ChildItem installer -Force
@@ -55,14 +57,18 @@ jobs:
             if (Test-Path $bundleDir) { Get-ChildItem -Path $bundleDir -Recurse }
             throw "NSIS setup EXE was not found."
           }
+          Copy-Item $setup.FullName (Join-Path $releaseDir "Dietoy-FINAL-0.3.0-Setup.exe") -Force
           Copy-Item $setup.FullName (Join-Path $releaseDir "Dietoy-Setup.exe") -Force
           Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
           Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
           Copy-Item "installer\README-USB.txt" $releaseDir -Force
+          "branch=${{ github.ref_name }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8
+          "commit=${{ github.sha }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
+          "version=0.3.0" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
           Get-ChildItem $releaseDir
 
       - name: Upload release-usb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dietoy-v0.2.0-release-usb
+          name: dietoy-final-0.3.0-release-usb
           path: release-usb
