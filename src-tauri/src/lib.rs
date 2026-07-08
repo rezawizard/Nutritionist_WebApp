@@ -1,4 +1,4 @@
-use chrono::{NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -167,11 +167,56 @@ struct Attachment {
     created_at: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ServiceCatalogItem {
+    id: Option<i64>,
+    name: String,
+    #[serde(default)]
+    default_price: f64,
+    #[serde(default)]
+    default_duration_minutes: Option<i64>,
+    #[serde(default)]
+    body_area_required: bool,
+    #[serde(default = "default_active_service")]
+    active: bool,
+}
+
+fn default_active_service() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+struct DashboardGoalCounts {
+    lose: i64,
+    maintain: i64,
+    gain: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct DashboardVisitSummary {
+    id: Option<i64>,
+    client_id: i64,
+    client_name: String,
+    visit_date: String,
+    visit_time: String,
+    status: String,
+    total_fee: f64,
+}
+
 #[derive(Debug, Serialize)]
 struct DashboardStats {
     total_clients: i64,
     active_clients: i64,
+    archived_clients: i64,
+    goal_counts: DashboardGoalCounts,
+    visits_today: i64,
+    visits_next_7_days: i64,
+    visits_this_month: i64,
+    revenue_this_month: f64,
+    upcoming_followups: i64,
     recent_clients: Vec<Client>,
+    upcoming_visits: Vec<DashboardVisitSummary>,
+    recent_visits: Vec<DashboardVisitSummary>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -504,6 +549,24 @@ fn init_db(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|err| err.to_string())?;
+
+    let service_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM service_catalog", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    if service_count == 0 {
+        let default_services = [
+            ("ویزیت تغذیه", 0.0, Some(30_i64), 0_i64),
+            ("آنالیز بدن", 0.0, Some(20_i64), 0_i64),
+            ("تنظیم برنامه غذایی", 0.0, Some(45_i64), 0_i64),
+        ];
+        for (name, price, duration, body_area_required) in default_services {
+            conn.execute(
+                "INSERT INTO service_catalog (name, default_price, default_duration_minutes, body_area_required, active) VALUES (?1, ?2, ?3, ?4, 1)",
+                params![name, price, duration, body_area_required],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+    }
 
     ensure_column(conn, "clients", "phone", "phone TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "clients", "email", "email TEXT NOT NULL DEFAULT ''")?;
@@ -983,6 +1046,94 @@ fn save_visit_measurements(state: tauri::State<'_, AppState>, measurements: Visi
     save_visit_measurements_inner(&conn, measurements)
 }
 
+fn row_to_service_catalog_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServiceCatalogItem> {
+    Ok(ServiceCatalogItem {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        default_price: row.get(2)?,
+        default_duration_minutes: row.get(3)?,
+        body_area_required: row.get::<_, i64>(4)? == 1,
+        active: row.get::<_, i64>(5)? == 1,
+    })
+}
+
+#[tauri::command]
+fn list_service_catalog(state: tauri::State<'_, AppState>, active_only: bool) -> Result<Vec<ServiceCatalogItem>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let sql = if active_only {
+        "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE active = 1 ORDER BY name ASC, id ASC"
+    } else {
+        "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog ORDER BY active DESC, name ASC, id ASC"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
+    let items = stmt
+        .query_map([], row_to_service_catalog_item)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+#[tauri::command]
+fn save_service_catalog_item(
+    state: tauri::State<'_, AppState>,
+    item: ServiceCatalogItem,
+) -> Result<ServiceCatalogItem, String> {
+    let name = item.name.trim();
+    if name.is_empty() {
+        return Err("نام خدمت الزامی است.".to_string());
+    }
+    if !item.default_price.is_finite() || item.default_price < 0.0 {
+        return Err("تعرفه خدمت باید عددی معتبر و غیرمنفی باشد.".to_string());
+    }
+    if let Some(duration) = item.default_duration_minutes {
+        if duration < 0 || duration > 1440 {
+            return Err("مدت خدمت باید بین ۰ تا ۱۴۴۰ دقیقه باشد.".to_string());
+        }
+    }
+
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let id = if let Some(id) = item.id {
+        let affected = conn
+            .execute(
+                "UPDATE service_catalog SET name=?1, default_price=?2, default_duration_minutes=?3, body_area_required=?4, active=?5 WHERE id=?6",
+                params![
+                    name,
+                    item.default_price,
+                    item.default_duration_minutes,
+                    if item.body_area_required { 1 } else { 0 },
+                    if item.active { 1 } else { 0 },
+                    id
+                ],
+            )
+            .map_err(|err| err.to_string())?;
+        if affected == 0 {
+            return Err("خدمت موردنظر پیدا نشد.".to_string());
+        }
+        id
+    } else {
+        conn.execute(
+            "INSERT INTO service_catalog (name, default_price, default_duration_minutes, body_area_required, active) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                name,
+                item.default_price,
+                item.default_duration_minutes,
+                if item.body_area_required { 1 } else { 0 },
+                if item.active { 1 } else { 0 }
+            ],
+        )
+        .map_err(|err| err.to_string())?;
+        conn.last_insert_rowid()
+    };
+
+    conn.query_row(
+        "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE id=?1",
+        params![id],
+        row_to_service_catalog_item,
+    )
+    .map_err(|err| err.to_string())
+}
+
 fn row_to_visit_service(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitService> {
     Ok(VisitService {
         id: row.get(0)?,
@@ -1032,10 +1183,12 @@ fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Resu
     let mut stmt = conn
         .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
         .map_err(|err| err.to_string())?;
-    stmt.query_map(params![visit_id], row_to_visit_service)
+    let items = stmt
+        .query_map(params![visit_id], row_to_visit_service)
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    Ok(items)
 }
 
 fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> {
@@ -1065,9 +1218,8 @@ fn client_folder(state: &AppState, client_id: i64) -> Result<PathBuf, String> {
     Ok(base)
 }
 
-#[tauri::command]
-fn import_visit_attachment(
-    state: tauri::State<'_, AppState>,
+fn import_attachment_inner(
+    state: &AppState,
     source_path: String,
     mut attachment: Attachment,
 ) -> Result<Attachment, String> {
@@ -1085,12 +1237,29 @@ fn import_visit_attachment(
         .and_then(|value| value.to_str())
         .ok_or_else(|| "نام فایل معتبر نیست.".to_string())?
         .to_string();
-    let target_dir = client_folder(&state, attachment.client_id)?.join("attachments");
+    let target_dir = client_folder(state, attachment.client_id)?.join("attachments");
     fs::create_dir_all(&target_dir).map_err(|err| err.to_string())?;
-    let target = target_dir.join(&file_name);
+
+    let mut target = target_dir.join(&file_name);
+    if target.exists() {
+        let extension = source.extension().and_then(|value| value.to_str()).unwrap_or("");
+        let stem = source.file_stem().and_then(|value| value.to_str()).unwrap_or("attachment");
+        let suffix = Utc::now().timestamp_millis();
+        let unique_name = if extension.is_empty() {
+            format!("{stem}-{suffix}")
+        } else {
+            format!("{stem}-{suffix}.{extension}")
+        };
+        target = target_dir.join(unique_name);
+    }
+
     fs::copy(&source, &target).map_err(|err| format!("کپی فایل انجام نشد: {err}"))?;
     let timestamp = now();
-    attachment.file_name = file_name;
+    attachment.file_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(&file_name)
+        .to_string();
     attachment.local_path = target.to_string_lossy().to_string();
     if attachment.attachment_date.is_empty() {
         attachment.attachment_date = Utc::now().date_naive().to_string();
@@ -1106,15 +1275,53 @@ fn import_visit_attachment(
 }
 
 #[tauri::command]
+fn import_visit_attachment(
+    state: tauri::State<'_, AppState>,
+    source_path: String,
+    attachment: Attachment,
+) -> Result<Attachment, String> {
+    import_attachment_inner(state.inner(), source_path, attachment)
+}
+
+#[tauri::command]
+fn import_attachment(
+    state: tauri::State<'_, AppState>,
+    client_id: i64,
+    visit_id: Option<i64>,
+    path: String,
+    category: String,
+    title: String,
+    attachment_date: String,
+    notes: String,
+) -> Result<Attachment, String> {
+    let attachment = Attachment {
+        id: None,
+        client_id,
+        visit_id,
+        category: if category.trim().is_empty() { "other".to_string() } else { category },
+        title,
+        file_name: String::new(),
+        local_path: String::new(),
+        attachment_date,
+        notes,
+        created_at: None,
+    };
+    import_attachment_inner(state.inner(), path, attachment)
+}
+
+
+#[tauri::command]
 fn list_client_attachments(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<Attachment>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
         .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
         .map_err(|err| err.to_string())?;
-    stmt.query_map(params![client_id], row_to_attachment)
+    let items = stmt
+        .query_map(params![client_id], row_to_attachment)
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    Ok(items)
 }
 
 fn open_path_with_system(path: PathBuf) -> Result<(), String> {
@@ -1164,6 +1371,400 @@ fn open_attachment(state: tauri::State<'_, AppState>, attachment_id: i64) -> Res
     open_path_with_system(PathBuf::from(path))
 }
 
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
+    if value.trim().is_empty() { fallback } else { value.trim() }
+}
+
+fn gender_label(value: &str) -> &'static str {
+    match value {
+        "male" => "آقا",
+        "female" => "خانم",
+        _ => "—",
+    }
+}
+
+fn goal_label(value: &str) -> &'static str {
+    match value {
+        "lose" => "کاهش وزن",
+        "maintain" => "ثبات وزن",
+        "gain" => "افزایش وزن",
+        _ => "—",
+    }
+}
+
+fn activity_label(value: &str) -> &'static str {
+    match value {
+        "sedentary" => "کم‌تحرک",
+        "light" => "فعالیت سبک",
+        "moderate" => "فعالیت متوسط",
+        "active" => "فعال",
+        "very_active" => "بسیار فعال",
+        _ => "—",
+    }
+}
+
+fn visit_status_label(value: &str) -> &'static str {
+    match value {
+        "tentative" => "پیشنهادی",
+        "confirmed" => "تأیید شده",
+        "scheduled" => "زمان‌بندی شده",
+        "completed" | "done" => "انجام شده",
+        "cancelled" | "canceled" => "لغو شده",
+        "pending" => "در انتظار",
+        _ => "—",
+    }
+}
+
+fn attachment_category_label(value: &str) -> &'static str {
+    match value {
+        "body_analysis" => "آنالیز بدن",
+        "lab" => "آزمایش",
+        "medical_report" => "گزارش پزشکی",
+        "other" => "سایر",
+        _ => "سایر",
+    }
+}
+
+fn money(value: f64) -> String {
+    if value.abs() < f64::EPSILON {
+        "۰".to_string()
+    } else {
+        format!("{value:.0}")
+    }
+}
+
+fn number(value: f64, digits: usize) -> String {
+    match digits {
+        0 => format!("{value:.0}"),
+        1 => format!("{value:.1}"),
+        2 => format!("{value:.2}"),
+        _ => format!("{value:.3}"),
+    }
+}
+
+fn optional_number(value: Option<f64>, digits: usize) -> String {
+    value.map(|item| number(item, digits)).unwrap_or_else(|| "—".to_string())
+}
+
+fn bmi_value(weight_kg: f64, height_cm: f64) -> f64 {
+    if height_cm <= 0.0 { return 0.0; }
+    let height_m = height_cm / 100.0;
+    weight_kg / (height_m * height_m)
+}
+
+fn report_calculations(conn: &Connection, client: &Client) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), String> {
+    let bmi = bmi_value(client.weight_kg, client.height_cm);
+    let height_m = client.height_cm / 100.0;
+    let ibw_factor = read_number_setting(conn, "calc_ibw_bmi_factor", 22.0)?;
+    let abw_divisor = read_number_setting(conn, "calc_abw_divisor", 4.0)?;
+    let bmr_base = read_number_setting(conn, "calc_bmr_base", 24.0)?;
+    let gender_factor = if client.gender == "male" {
+        read_number_setting(conn, "calc_male_factor", 1.0)?
+    } else {
+        read_number_setting(conn, "calc_female_factor", 0.95)?
+    };
+    let bmr_adjustment = read_number_setting(conn, "calc_bmr_adjustment", 1.1)?;
+    let activity_factor = match client.activity_level.as_str() {
+        "sedentary" => read_number_setting(conn, "calc_activity_sedentary", 1.3)?,
+        "light" => read_number_setting(conn, "calc_activity_light", 1.3)?,
+        "moderate" => read_number_setting(conn, "calc_activity_moderate", 1.3)?,
+        "active" => read_number_setting(conn, "calc_activity_active", 1.3)?,
+        "very_active" => read_number_setting(conn, "calc_activity_very_active", 1.3)?,
+        _ => 1.3,
+    };
+    let goal_adjustment = match client.goal.as_str() {
+        "lose" => read_number_setting(conn, "calc_goal_loss", -500.0)?,
+        "gain" => read_number_setting(conn, "calc_goal_gain", 300.0)?,
+        _ => read_number_setting(conn, "calc_goal_maintain", 0.0)?,
+    };
+    let protein_percent = read_number_setting(conn, "macro_protein_percent", 20.0)?;
+    let carb_percent = read_number_setting(conn, "macro_carb_percent", 50.0)?;
+    let fat_percent = read_number_setting(conn, "macro_fat_percent", 30.0)?;
+    let ibw = ibw_factor * height_m * height_m;
+    let abw = ibw + (client.weight_kg - ibw) / abw_divisor.max(0.1);
+    let bmr = bmr_base * gender_factor * abw * bmr_adjustment;
+    let tee = bmr * activity_factor;
+    let target = tee + goal_adjustment;
+    Ok((bmi, ibw, abw, bmr, tee, target, protein_percent, carb_percent, fat_percent, activity_factor))
+}
+
+fn list_visit_services_inner(conn: &Connection, visit_id: i64) -> Result<Vec<VisitService>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
+        .map_err(|err| err.to_string())?;
+    let items = stmt
+        .query_map(params![visit_id], row_to_visit_service)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+fn list_client_attachments_inner(conn: &Connection, client_id: i64) -> Result<Vec<Attachment>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
+        .map_err(|err| err.to_string())?;
+    let items = stmt
+        .query_map(params![client_id], row_to_attachment)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+fn report_table_row(label: &str, value: String) -> String {
+    format!("<tr><th>{}</th><td>{}</td></tr>", escape_html(label), value)
+}
+
+fn build_client_report_html(conn: &Connection, client: &Client) -> Result<String, String> {
+    let clinic_name = read_setting(conn, "clinic_name").unwrap_or_default();
+    let dietitian_name = read_setting(conn, "dietitian_name").unwrap_or_default();
+    let client_id = client.id.ok_or_else(|| "شناسه مراجع معتبر نیست.".to_string())?;
+    let visits = {
+        let mut stmt = conn
+            .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
+            .map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map(params![client_id], row_to_visit)
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        rows
+    };
+    let attachments = list_client_attachments_inner(conn, client_id)?;
+    let (bmi, ibw, abw, bmr, tee, target, protein_percent, carb_percent, fat_percent, activity_factor) = report_calculations(conn, client)?;
+    let protein_grams = (target * (protein_percent / 100.0)) / 4.0;
+    let carb_grams = (target * (carb_percent / 100.0)) / 4.0;
+    let fat_grams = (target * (fat_percent / 100.0)) / 9.0;
+
+    let mut visit_cards = String::new();
+    for visit in &visits {
+        let measurements = if let Some(visit_id) = visit.id {
+            get_measurements_for_visit(conn, visit_id)?
+        } else {
+            None
+        };
+        let services = if let Some(visit_id) = visit.id {
+            list_visit_services_inner(conn, visit_id)?
+        } else {
+            Vec::new()
+        };
+        let services_total: f64 = services.iter().map(|item| item.total).sum();
+        let mut services_rows = String::new();
+        for service in &services {
+            services_rows.push_str(&format!(
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape_html(&service.service_name_snapshot),
+                escape_html(non_empty(&service.body_area, "—")),
+                number(service.quantity, 1),
+                money(service.total),
+            ));
+        }
+        let services_table = if services.is_empty() {
+            "<p class=\"muted\">خدمتی برای این ویزیت ثبت نشده است.</p>".to_string()
+        } else {
+            format!("<table><thead><tr><th>خدمت</th><th>ناحیه</th><th>تعداد</th><th>مبلغ</th></tr></thead><tbody>{}</tbody></table>", services_rows)
+        };
+        let measurement_rows = if let Some(m) = measurements {
+            let bmi_snapshot = m.bmi_snapshot.unwrap_or_else(|| bmi_value(m.weight_kg, m.height_cm.unwrap_or(client.height_cm)));
+            format!(
+                "{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
+                report_table_row("وزن", format!("{} کیلوگرم", number(m.weight_kg, 1))),
+                report_table_row("قد", format!("{} سانتی‌متر", optional_number(m.height_cm, 1))),
+                report_table_row("BMI", number(bmi_snapshot, 1)),
+                report_table_row("درصد چربی", optional_number(m.body_fat_percent, 1)),
+                report_table_row("توده عضله", optional_number(m.muscle_mass, 1)),
+                report_table_row("چربی احشایی", optional_number(m.visceral_fat, 1)),
+                report_table_row("دور کمر", optional_number(m.waist_cm, 1)),
+                report_table_row("دور شکم", optional_number(m.abdomen_cm, 1)),
+                report_table_row("دور باسن", optional_number(m.hip_cm, 1)),
+                report_table_row("دور سینه", optional_number(m.chest_cm, 1)),
+                report_table_row("دور بازو", optional_number(m.arm_cm, 1)),
+                report_table_row("دور ران", optional_number(m.thigh_cm, 1)),
+                report_table_row("دور ساق", optional_number(m.calf_cm, 1)),
+                report_table_row("دور گردن", optional_number(m.neck_cm, 1)),
+            )
+        } else {
+            report_table_row("اندازه‌گیری", "ثبت نشده".to_string())
+        };
+        visit_cards.push_str(&format!(
+            r#"<section class="visit-card">
+  <h3>ویزیت: {date} {time}</h3>
+  <div class="pill-row"><span>{status}</span><span>مبلغ خدمات: {services_total} تومان</span><span>مراجعه بعدی: {next_date} {next_time}</span></div>
+  <table><tbody>{measurement_rows}</tbody></table>
+  <h4>خدمات</h4>{services_table}
+  <h4>یادداشت بالینی</h4><p>{clinical_notes}</p>
+</section>"#,
+            date = escape_html(non_empty(&visit.visit_date, "—")),
+            time = escape_html(non_empty(&visit.visit_time, "")),
+            status = visit_status_label(&visit.status),
+            services_total = money(if visit.total_fee > 0.0 { visit.total_fee } else { services_total }),
+            next_date = escape_html(non_empty(&visit.next_visit_date, "—")),
+            next_time = escape_html(non_empty(&visit.next_visit_time, "")),
+            measurement_rows = measurement_rows,
+            services_table = services_table,
+            clinical_notes = escape_html(non_empty(&visit.clinical_notes, "—")),
+        ));
+    }
+    if visit_cards.is_empty() {
+        visit_cards = "<p class=\"muted\">هنوز ویزیتی برای این مراجع ثبت نشده است.</p>".to_string();
+    }
+
+    let mut attachment_rows = String::new();
+    for attachment in attachments {
+        attachment_rows.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            escape_html(non_empty(&attachment.title, non_empty(&attachment.file_name, "—"))),
+            attachment_category_label(&attachment.category),
+            escape_html(non_empty(&attachment.attachment_date, "—")),
+            escape_html(non_empty(&attachment.local_path, "—")),
+        ));
+    }
+    let attachments_table = if attachment_rows.is_empty() {
+        "<p class=\"muted\">فایلی به پرونده وصل نشده است.</p>".to_string()
+    } else {
+        format!("<table><thead><tr><th>عنوان</th><th>دسته</th><th>تاریخ</th><th>مسیر</th></tr></thead><tbody>{}</tbody></table>", attachment_rows)
+    };
+
+    Ok(format!(r#"<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <title>پرونده مراجع - {client_name}</title>
+  <style>
+    @page {{ size: A4; margin: 14mm; }}
+    * {{ box-sizing: border-box; }}
+    body {{ font-family: Vazirmatn, Tahoma, Arial, sans-serif; direction: rtl; color: #21362f; background: #f7f3ea; margin: 0; padding: 24px; line-height: 1.8; }}
+    .page {{ max-width: 960px; margin: 0 auto; background: #fff; border-radius: 24px; padding: 28px; box-shadow: 0 18px 48px rgba(15, 91, 70, 0.13); }}
+    header {{ border-bottom: 2px solid #e8ded0; padding-bottom: 18px; margin-bottom: 20px; }}
+    h1 {{ margin: 0 0 8px; font-size: 28px; color: #0f5b46; }}
+    h2 {{ margin: 28px 0 12px; font-size: 20px; color: #0f5b46; }}
+    h3 {{ margin: 0 0 10px; font-size: 17px; color: #193f35; }}
+    h4 {{ margin: 16px 0 8px; font-size: 14px; color: #426157; }}
+    .muted {{ color: #7a857e; }}
+    .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
+    .metric-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
+    .metric {{ border: 1px solid #e8ded0; border-radius: 16px; padding: 12px; background: #fbfaf7; }}
+    .metric b {{ display: block; color: #0f5b46; font-size: 18px; }}
+    table {{ width: 100%; border-collapse: collapse; margin: 10px 0 14px; background: #fff; }}
+    th, td {{ border: 1px solid #eadfce; padding: 9px 10px; vertical-align: top; text-align: right; }}
+    th {{ width: 28%; background: #f5efe5; color: #38534b; }}
+    .visit-card {{ break-inside: avoid; border: 1px solid #e8ded0; border-radius: 18px; padding: 16px; margin: 14px 0; background: #fffdf8; }}
+    .pill-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }}
+    .pill-row span {{ border-radius: 999px; background: #e6f0ea; color: #0f5b46; padding: 4px 10px; font-size: 12px; }}
+    .note {{ white-space: pre-wrap; border: 1px dashed #d8cbb9; border-radius: 16px; padding: 12px; background: #fffaf1; }}
+    @media print {{ body {{ background: #fff; padding: 0; }} .page {{ box-shadow: none; border-radius: 0; padding: 0; }} }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>پرونده مراجع</h1>
+      <p class="muted">{clinic_name} {dietitian_name} · تاریخ تولید: {generated_at}</p>
+    </header>
+
+    <h2>اطلاعات پایه</h2>
+    <div class="grid">
+      <table><tbody>
+        {base_rows_left}
+      </tbody></table>
+      <table><tbody>
+        {base_rows_right}
+      </tbody></table>
+    </div>
+
+    <h2>محاسبات تغذیه</h2>
+    <div class="metric-grid">
+      <div class="metric"><span>BMI</span><b>{bmi}</b></div>
+      <div class="metric"><span>IBW</span><b>{ibw} kg</b></div>
+      <div class="metric"><span>ABW</span><b>{abw} kg</b></div>
+      <div class="metric"><span>BMR</span><b>{bmr} kcal</b></div>
+      <div class="metric"><span>TEE</span><b>{tee} kcal</b></div>
+      <div class="metric"><span>هدف کالری</span><b>{target} kcal</b></div>
+    </div>
+    <table><tbody>
+      {macro_rows}
+    </tbody></table>
+
+    <h2>ویزیت‌ها و اندازه‌گیری‌ها</h2>
+    {visit_cards}
+
+    <h2>فایل‌های پیوست</h2>
+    {attachments_table}
+
+    <h2>یادداشت پرونده</h2>
+    <div class="note">{client_notes}</div>
+  </main>
+</body>
+</html>"#,
+        client_name = escape_html(&client.full_name),
+        clinic_name = escape_html(non_empty(&clinic_name, "")),
+        dietitian_name = escape_html(non_empty(&dietitian_name, "")),
+        generated_at = Utc::now().date_naive(),
+        base_rows_left = format!(
+            "{}{}{}{}{}",
+            report_table_row("نام", escape_html(&client.full_name)),
+            report_table_row("جنسیت", gender_label(&client.gender).to_string()),
+            report_table_row("سن", format!("{} سال", client.age)),
+            report_table_row("قد", format!("{} سانتی‌متر", number(client.height_cm, 1))),
+            report_table_row("وزن فعلی", format!("{} کیلوگرم", number(client.weight_kg, 1))),
+        ),
+        base_rows_right = format!(
+            "{}{}{}{}{}",
+            report_table_row("هدف", goal_label(&client.goal).to_string()),
+            report_table_row("سطح فعالیت", activity_label(&client.activity_level).to_string()),
+            report_table_row("شماره تماس", escape_html(non_empty(&client.phone, "—"))),
+            report_table_row("ایمیل", escape_html(non_empty(&client.email, "—"))),
+            report_table_row("وضعیت", if client.archived { "بایگانی" } else { "فعال" }.to_string()),
+        ),
+        bmi = number(bmi, 1),
+        ibw = number(ibw, 1),
+        abw = number(abw, 1),
+        bmr = number(bmr, 0),
+        tee = number(tee, 0),
+        target = number(target, 0),
+        macro_rows = format!(
+            "{}{}{}{}",
+            report_table_row("ضریب فعالیت", number(activity_factor, 2)),
+            report_table_row("پروتئین", format!("{}٪ / {} گرم", number(protein_percent, 0), number(protein_grams, 0))),
+            report_table_row("کربوهیدرات", format!("{}٪ / {} گرم", number(carb_percent, 0), number(carb_grams, 0))),
+            report_table_row("چربی", format!("{}٪ / {} گرم", number(fat_percent, 0), number(fat_grams, 0))),
+        ),
+        visit_cards = visit_cards,
+        attachments_table = attachments_table,
+        client_notes = escape_html(non_empty(&client.notes, "—")),
+    ))
+}
+
+fn export_client_report_inner(state: &AppState, client_id: i64) -> Result<String, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let client = get_client(&conn, client_id)?;
+    let html = build_client_report_html(&conn, &client)?;
+    let report_dir = client_folder(state, client_id)?.join("reports");
+    fs::create_dir_all(&report_dir).map_err(|err| format!("ساخت پوشه گزارش انجام نشد: {err}"))?;
+    let safe_date = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let path = report_dir.join(format!("dietoy-client-{client_id:06}-{safe_date}.html"));
+    fs::write(&path, html).map_err(|err| format!("ذخیره پرونده چاپی انجام نشد: {err}"))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn export_client_report(state: tauri::State<'_, AppState>, client_id: i64) -> Result<String, String> {
+    let path = export_client_report_inner(state.inner(), client_id)?;
+    open_path_with_system(PathBuf::from(&path))?;
+    Ok(path)
+}
+
 #[tauri::command]
 fn export_client_backup(state: tauri::State<'_, AppState>, client_id: i64) -> Result<String, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
@@ -1206,28 +1807,127 @@ fn archive_client(state: tauri::State<'_, AppState>, id: i64, archived: bool) ->
     Ok(())
 }
 
+fn row_to_dashboard_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<DashboardVisitSummary> {
+    Ok(DashboardVisitSummary {
+        id: row.get(0)?,
+        client_id: row.get(1)?,
+        client_name: row.get(2)?,
+        visit_date: row.get(3)?,
+        visit_time: row.get(4)?,
+        status: row.get(5)?,
+        total_fee: row.get(6)?,
+    })
+}
+
 #[tauri::command]
 fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let today = Utc::now().date_naive();
+    let today_iso = today.format("%Y-%m-%d").to_string();
+    let next_week_iso = (today + Duration::days(7)).format("%Y-%m-%d").to_string();
+    let month_prefix = today.format("%Y-%m").to_string();
+    let month_like = format!("{}%", month_prefix);
+
     let total_clients: i64 = conn
         .query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0))
         .map_err(|err| err.to_string())?;
     let active_clients: i64 = conn
         .query_row("SELECT COUNT(*) FROM clients WHERE archived = 0", [], |row| row.get(0))
         .map_err(|err| err.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, full_name, gender, age, height_cm, weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path FROM clients WHERE archived = 0 ORDER BY updated_at DESC LIMIT 5")
+    let archived_clients: i64 = conn
+        .query_row("SELECT COUNT(*) FROM clients WHERE archived = 1", [], |row| row.get(0))
         .map_err(|err| err.to_string())?;
-    let recent_clients = stmt
-        .query_map([], row_to_client)
-        .map_err(|err| err.to_string())?
-        .collect::<Result<Vec<_>, _>>()
+
+    let goal_count = |goal: &str| -> Result<i64, String> {
+        conn.query_row(
+            "SELECT COUNT(*) FROM clients WHERE archived = 0 AND goal = ?1",
+            params![goal],
+            |row| row.get(0),
+        )
+        .map_err(|err| err.to_string())
+    };
+
+    let visits_today: i64 = conn
+        .query_row("SELECT COUNT(*) FROM visits WHERE visit_date = ?1", params![today_iso], |row| row.get(0))
         .map_err(|err| err.to_string())?;
+    let visits_next_7_days: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM visits WHERE visit_date >= ?1 AND visit_date <= ?2",
+            params![today_iso, next_week_iso],
+            |row| row.get(0),
+        )
+        .map_err(|err| err.to_string())?;
+    let visits_this_month: i64 = conn
+        .query_row("SELECT COUNT(*) FROM visits WHERE visit_date LIKE ?1", params![month_like], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    let revenue_this_month: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(total_fee), 0) FROM visits WHERE visit_date LIKE ?1",
+            params![month_like],
+            |row| row.get(0),
+        )
+        .map_err(|err| err.to_string())?;
+    let upcoming_followups: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM visits WHERE next_visit_enabled = 1 AND next_visit_date >= ?1",
+            params![today_iso],
+            |row| row.get(0),
+        )
+        .map_err(|err| err.to_string())?;
+
+    let recent_clients = {
+        let mut stmt = conn
+            .prepare("SELECT id, full_name, gender, age, height_cm, weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path FROM clients WHERE archived = 0 ORDER BY updated_at DESC LIMIT 5")
+            .map_err(|err| err.to_string())?;
+        let items = stmt
+            .query_map([], row_to_client)
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        items
+    };
+
+    let upcoming_visits = {
+        let mut stmt = conn
+            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee FROM visits JOIN clients ON clients.id = visits.client_id WHERE visits.visit_date >= ?1 ORDER BY visits.visit_date ASC, visits.visit_time ASC LIMIT 6")
+            .map_err(|err| err.to_string())?;
+        let items = stmt
+            .query_map(params![today_iso], row_to_dashboard_visit)
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        items
+    };
+
+    let recent_visits = {
+        let mut stmt = conn
+            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee FROM visits JOIN clients ON clients.id = visits.client_id ORDER BY visits.visit_date DESC, visits.visit_time DESC, visits.id DESC LIMIT 6")
+            .map_err(|err| err.to_string())?;
+        let items = stmt
+            .query_map([], row_to_dashboard_visit)
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        items
+    };
 
     Ok(DashboardStats {
         total_clients,
         active_clients,
+        archived_clients,
+        goal_counts: DashboardGoalCounts {
+            lose: goal_count("lose")?,
+            maintain: goal_count("maintain")?,
+            gain: goal_count("gain")?,
+        },
+        visits_today,
+        visits_next_7_days,
+        visits_this_month,
+        revenue_this_month,
+        upcoming_followups,
         recent_clients,
+        upcoming_visits,
+        recent_visits,
     })
 }
 
@@ -1521,16 +2221,19 @@ pub fn run() {
             change_credentials,
             dashboard_stats,
             export_client_backup,
+            export_client_report,
             export_data_backup,
             export_database,
             get_settings,
             get_visit_detail,
             import_brand_asset,
+            import_attachment,
             import_visit_attachment,
             list_client_records,
             list_client_attachments,
             list_clients,
             list_client_visits,
+            list_service_catalog,
             list_visit_services,
             login,
             open_attachment,
@@ -1538,6 +2241,7 @@ pub fn run() {
             restore_data_backup,
             save_client,
             save_client_record,
+            save_service_catalog_item,
             save_visit_measurements,
             save_visit_service,
             save_visit_with_measurements,
