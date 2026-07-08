@@ -1,7 +1,7 @@
 export type Gender = "female" | "male";
 export type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
 export type Goal = "lose" | "maintain" | "gain";
-export type VisitStatus = "tentative" | "confirmed" | "done" | "cancelled" | "completed" | "scheduled" | "canceled";
+export type VisitStatus = "tentative" | "confirmed" | "done" | "cancelled" | "completed" | "scheduled";
 export type AttachmentCategory = "body_analysis" | "lab" | "medical_report" | "other";
 
 export interface Client {
@@ -124,23 +124,23 @@ export interface Settings {
   logo_path: string;
   background_image_path: string;
   username: string;
-  calc_ibw_bmi_factor: number;
-  calc_abw_divisor: number;
-  calc_bmr_base: number;
-  calc_male_factor: number;
-  calc_female_factor: number;
-  calc_bmr_adjustment: number;
-  calc_activity_sedentary: number;
-  calc_activity_light: number;
-  calc_activity_moderate: number;
-  calc_activity_active: number;
-  calc_activity_very_active: number;
-  calc_goal_loss: number;
-  calc_goal_maintain: number;
-  calc_goal_gain: number;
-  macro_protein_percent: number;
-  macro_carb_percent: number;
-  macro_fat_percent: number;
+  calc_ibw_bmi_factor?: number;
+  calc_abw_divisor?: number;
+  calc_bmr_base?: number;
+  calc_male_factor?: number;
+  calc_female_factor?: number;
+  calc_bmr_adjustment?: number;
+  calc_activity_sedentary?: number;
+  calc_activity_light?: number;
+  calc_activity_moderate?: number;
+  calc_activity_active?: number;
+  calc_activity_very_active?: number;
+  calc_goal_loss?: number;
+  calc_goal_maintain?: number;
+  calc_goal_gain?: number;
+  macro_protein_percent?: number;
+  macro_carb_percent?: number;
+  macro_fat_percent?: number;
 }
 
 export interface DashboardStats {
