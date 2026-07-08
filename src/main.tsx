@@ -5,10 +5,6 @@ import "@fontsource/vazirmatn/500.css";
 import "@fontsource/vazirmatn/600.css";
 import "@fontsource/vazirmatn/700.css";
 import "./styles.css";
-import "./profile-polish.css";
-import "./profileTabs";
-import "./pdfPreviewFix";
-import "./clinicalUxGuard";
 import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

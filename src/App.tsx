@@ -3,22 +3,22 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
   Calculator,
+  Camera,
   CalendarDays,
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   ClipboardList,
   Database,
   Download,
-  Eye,
-  FileText,
   FileUp,
   Home,
   Image as ImageIcon,
   KeyRound,
   Leaf,
   LogOut,
+  Mail,
   Palette,
+  Pencil,
+  Phone,
   Plus,
   RotateCcw,
   Save,
@@ -28,48 +28,29 @@ import {
   TrendingUp,
   UserRound,
   Users,
-  type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import {
   activityLabels,
   bmiCategory,
   calculateNutrition,
   cn,
-  defaultCalculationSettings,
   emptyClient,
   formatNumber,
   formatPersianDate,
+  getErrorMessage,
+  isoToJalaliInput,
+  jalaliInputToIso,
+  jalaliPartsFromIso,
+  daysInJalaliMonth,
   genderLabels,
   goalLabels,
+  isValidIsoDate,
   todayIsoDate,
+  toPersianDigits,
 } from "./lib";
-import {
-  formatJalaliInput,
-  isoToJalali,
-  jalaliMonthLength,
-  jalaliToIso,
-  monthStartWeekday,
-  parseJalaliInput,
-  persianMonthNames,
-  persianWeekdays,
-} from "./persianDate";
-import type {
-  ActivityLevel,
-  Attachment,
-  AttachmentCategory,
-  Client,
-  ClientRecord,
-  DashboardStats,
-  Gender,
-  Goal,
-  Screen,
-  ServiceCatalogItem,
-  Settings,
-  Visit,
-  VisitService,
-  VisitStatus,
-} from "./types";
+import type { ActivityLevel, Client, DashboardStats, Gender, Goal, Screen, Settings, VisitDetail } from "./types";
+import type { ClientRecord } from "./types";
 
 const defaultSettings: Settings = {
   dietitian_name: "",
@@ -80,56 +61,22 @@ const defaultSettings: Settings = {
   logo_path: "",
   background_image_path: "",
   username: "admin",
-  ...defaultCalculationSettings,
 };
 
 const dietoyTheme = {
+  name: "تم دایتوری",
   primary_color: "#0f5b46",
   background_color: "#10517A",
   text_color: "#f7f3ea",
 };
 
-const attachmentCategoryLabels: Record<AttachmentCategory, string> = {
-  body_analysis: "بادی‌آنالیز",
-  lab: "آزمایش",
-  medical_report: "گزارش پزشکی",
-  other: "سایر فایل‌ها",
-};
-
-const visitStatusOptions: Record<VisitStatus, string> = {
-  tentative: "موقت",
-  confirmed: "قطعی",
-  done: "انجام‌شده",
-  cancelled: "لغوشده",
-};
-
 type Toast = { id: number; text: string; kind?: "success" | "error" };
 type ToastFn = (text: string, kind?: Toast["kind"]) => void;
-type GoalFilter = "all" | Goal;
+type FieldErrors = Partial<Record<"full_name" | "age" | "height_cm" | "weight_kg" | "profile_image_path" | "visit_date" | "visit_time" | "next_visit_date", string>>;
+type ProfileTab = "summary" | "visits" | "base";
 
 function isDesktopRuntime() {
   return Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
-}
-
-function withDefaults(settings: Partial<Settings>): Settings {
-  return { ...defaultSettings, ...settings };
-}
-
-function normalizeClient(client: Client): Client {
-  return {
-    ...client,
-    next_visit_date: client.next_visit_date ?? "",
-    next_visit_status: client.next_visit_status ?? "tentative",
-  };
-}
-
-function dateOnly(value?: string) {
-  return value?.slice(0, 10) ?? "";
-}
-
-function timeOnly(value?: string) {
-  const time = value?.includes("T") ? value.split("T")[1]?.slice(0, 5) : "";
-  return time || "";
 }
 
 function assetUrl(path?: string) {
@@ -138,44 +85,29 @@ function assetUrl(path?: string) {
   return isDesktopRuntime() ? convertFileSrc(path) : path;
 }
 
-function fileExtension(path: string) {
-  return path.split(".").pop()?.toLowerCase() ?? "";
-}
-
 function applyVisualSettings(settings: Settings) {
   document.documentElement.style.setProperty("--primary", settings.primary_color || defaultSettings.primary_color);
   document.documentElement.style.setProperty("--app-bg", settings.background_color || defaultSettings.background_color);
   document.documentElement.style.setProperty("--app-text", settings.text_color || defaultSettings.text_color);
 }
 
+function colorValue(value: string | undefined, fallback: string) {
+  return /^#[0-9a-fA-F]{6}$/.test(value ?? "") ? value! : fallback;
+}
+
 function backgroundStyle(settings: Settings): CSSProperties {
   const image = assetUrl(settings.background_image_path);
-  if (!image) return { color: "var(--app-text)", backgroundColor: "var(--app-bg)" };
+  if (!image) {
+    return { color: "var(--app-text)", backgroundColor: "var(--app-bg)" };
+  }
   return {
     color: "var(--app-text)",
     backgroundColor: "var(--app-bg)",
-    backgroundImage: `linear-gradient(rgba(247, 243, 234, 0.80), rgba(247, 243, 234, 0.92)), url("${image}")`,
+    backgroundImage: `linear-gradient(rgba(247, 243, 234, 0.78), rgba(247, 243, 234, 0.9)), url("${image}")`,
     backgroundPosition: "center",
     backgroundSize: "cover",
     backgroundAttachment: "fixed",
   };
-}
-
-function addDaysIso(days: number) {
-  return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
-}
-
-function moneyInput(value: number) {
-  return Number.isFinite(value) && value !== 0 ? new Intl.NumberFormat("fa-IR").format(value) : "";
-}
-
-function parseMoneyInput(value: string) {
-  const normalized = value
-    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
-    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
-    .replace(/[^0-9.-]/g, "");
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function useToasts() {
@@ -183,7 +115,7 @@ function useToasts() {
   const push: ToastFn = (text, kind = "success") => {
     const id = Date.now();
     setToasts((items) => [...items, { id, text, kind }]);
-    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 3000);
+    window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 2800);
   };
   return { toasts, push };
 }
@@ -191,40 +123,29 @@ function useToasts() {
 export default function App() {
   const [unlocked, setUnlocked] = useState(false);
   const [screen, setScreen] = useState<Screen>("dashboard");
-  const [settings, setSettingsState] = useState<Settings>(defaultSettings);
+  const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [editing, setEditing] = useState<Client | null>(null);
-  const [calculationClient, setCalculationClient] = useState<Client | null>(null);
+  const [calculatorClient, setCalculatorClient] = useState<Client | null>(null);
   const [version, setVersion] = useState(0);
   const { toasts, push } = useToasts();
-
-  useEffect(() => {
-    applyVisualSettings(settings);
-  }, []);
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
     invoke<Settings>("get_settings")
       .then((next) => {
-        const merged = withDefaults(next);
-        setSettingsState(merged);
-        applyVisualSettings(merged);
+        setSettings(next);
+        applyVisualSettings(next);
       })
       .catch(() => push("تنظیمات خوانده نشد.", "error"));
   }, []);
 
-  const setSettings = (next: Settings) => {
-    const merged = withDefaults(next);
-    setSettingsState(merged);
-    applyVisualSettings(merged);
-  };
-
   const openClientForm = (client?: Client) => {
-    setEditing(client ? normalizeClient(client) : null);
+    setEditing(client ?? null);
     setScreen("client-form");
   };
 
-  const openCalculations = (client?: Client) => {
-    setCalculationClient(client ? normalizeClient(client) : null);
+  const openCalculator = (client?: Client) => {
+    setCalculatorClient(client ?? null);
     setScreen("calculator");
   };
 
@@ -235,12 +156,12 @@ export default function App() {
   return (
     <div className="app-shell min-h-screen bg-[var(--app-bg)]" dir="rtl" style={backgroundStyle(settings)}>
       <div className="flex min-h-screen">
-        <aside className="sticky top-0 hidden h-screen w-72 border-l border-warm-100 bg-paper/90 px-5 py-6 backdrop-blur lg:block">
+        <aside className="sticky top-0 hidden h-screen w-72 border-l border-warm-100 bg-paper/90 px-5 py-6 lg:block">
           <Brand settings={settings} />
           <nav className="mt-9 grid gap-2">
             <NavItem active={screen === "dashboard"} icon={Home} label="داشبورد" onClick={() => setScreen("dashboard")} />
             <NavItem active={screen === "clients" || screen === "client-form"} icon={Users} label="مراجعین" onClick={() => setScreen("clients")} />
-            <NavItem active={screen === "calculator"} icon={Calculator} label="محاسبات" onClick={() => openCalculations()} />
+            <NavItem active={screen === "calculator"} icon={Calculator} label="ماشین حساب" onClick={() => openCalculator()} />
             <NavItem active={screen === "settings"} icon={SettingsIcon} label="تنظیمات" onClick={() => setScreen("settings")} />
           </nav>
           <div className="absolute bottom-6 left-5 right-5">
@@ -249,13 +170,13 @@ export default function App() {
         </aside>
 
         <main className="w-full px-5 py-5 md:px-8 lg:px-10">
-          <MobileNav screen={screen} setScreen={setScreen} openCalculations={() => openCalculations()} />
+          <MobileNav screen={screen} setScreen={setScreen} openCalculator={() => openCalculator()} />
           {screen === "dashboard" && (
             <Dashboard
               version={version}
               settings={settings}
               onNew={() => openClientForm()}
-              onCalculations={() => openCalculations()}
+              onCalculator={() => openCalculator()}
               onEdit={openClientForm}
             />
           )}
@@ -264,24 +185,33 @@ export default function App() {
               version={version}
               onNew={() => openClientForm()}
               onEdit={openClientForm}
-              onCalculate={openCalculations}
+              onCalculate={openCalculator}
               onChanged={() => setVersion((value) => value + 1)}
               toast={push}
             />
           )}
           {screen === "client-form" && (
-            <ClientForm
+            <ClientProfileForm
               client={editing}
               onBack={() => setScreen("clients")}
               onSaved={(client) => {
-                setEditing(normalizeClient(client));
+                setEditing(client);
                 setVersion((value) => value + 1);
               }}
               toast={push}
             />
           )}
-          {screen === "calculator" && <CalculationsScreen initialClient={calculationClient} settings={settings} toast={push} />}
-          {screen === "settings" && <SettingsScreen settings={settings} setSettings={setSettings} toast={push} />}
+          {screen === "calculator" && <CalculatorScreen initialClient={calculatorClient} toast={push} />}
+          {screen === "settings" && (
+            <SettingsScreen
+              settings={settings}
+              setSettings={(next) => {
+                setSettings(next);
+                applyVisualSettings(next);
+              }}
+              toast={push}
+            />
+          )}
         </main>
       </div>
       <ToastStack toasts={toasts} />
@@ -293,6 +223,7 @@ function BrandLogo({ settings, className = "h-12 w-12" }: { settings: Settings; 
   const [failed, setFailed] = useState(false);
   const logo = settings.logo_path ? assetUrl(settings.logo_path) : "/logo.png";
   useEffect(() => setFailed(false), [logo]);
+
   if (failed) {
     return (
       <div className={cn("grid place-items-center rounded-control bg-[var(--primary)] text-white shadow-lift", className)}>
@@ -300,6 +231,7 @@ function BrandLogo({ settings, className = "h-12 w-12" }: { settings: Settings; 
       </div>
     );
   }
+
   return (
     <div className={cn("grid place-items-center overflow-hidden rounded-control bg-white text-[var(--primary)] shadow-lift", className)}>
       <img src={logo} alt="Dietoy" className="h-full w-full object-contain p-2" onError={() => setFailed(true)} />
@@ -319,28 +251,22 @@ function Brand({ settings }: { settings: Settings }) {
   );
 }
 
-function NavItem({ active, icon: Icon, label, onClick }: { active: boolean; icon: LucideIcon; label: string; onClick: () => void }) {
+function NavItem({ active, icon: Icon, label, onClick }: { active: boolean; icon: typeof Home; label: string; onClick: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "soft-transition flex h-12 items-center gap-3 rounded-control px-4 text-sm font-semibold",
-        active ? "bg-[var(--primary)] text-white shadow-lift" : "text-warm-500 hover:bg-warm-50 hover:text-charcoal",
-      )}
-    >
+    <button onClick={onClick} className={cn("soft-transition flex h-12 items-center gap-3 rounded-control px-4 text-sm font-semibold", active ? "bg-[var(--primary)] text-white shadow-lift" : "text-warm-500 hover:bg-warm-50 hover:text-charcoal")}>
       <Icon size={20} />
       {label}
     </button>
   );
 }
 
-function MobileNav({ screen, setScreen, openCalculations }: { screen: Screen; setScreen: (screen: Screen) => void; openCalculations: () => void }) {
+function MobileNav({ screen, setScreen, openCalculator }: { screen: Screen; setScreen: (screen: Screen) => void; openCalculator: () => void }) {
   const item = "grid h-11 place-items-center rounded-control border border-warm-100 bg-paper text-warm-500";
   return (
     <div className="mb-5 grid grid-cols-4 gap-2 lg:hidden">
       <button className={cn(item, screen === "dashboard" && "bg-[var(--primary)] text-white")} onClick={() => setScreen("dashboard")} aria-label="داشبورد"><Home size={20} /></button>
       <button className={cn(item, (screen === "clients" || screen === "client-form") && "bg-[var(--primary)] text-white")} onClick={() => setScreen("clients")} aria-label="مراجعین"><Users size={20} /></button>
-      <button className={cn(item, screen === "calculator" && "bg-[var(--primary)] text-white")} onClick={openCalculations} aria-label="محاسبات"><Calculator size={20} /></button>
+      <button className={cn(item, screen === "calculator" && "bg-[var(--primary)] text-white")} onClick={openCalculator} aria-label="ماشین حساب"><Calculator size={20} /></button>
       <button className={cn(item, screen === "settings" && "bg-[var(--primary)] text-white")} onClick={() => setScreen("settings")} aria-label="تنظیمات"><SettingsIcon size={20} /></button>
     </div>
   );
@@ -351,12 +277,13 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
   const [password, setPassword] = useState("admin");
   const [loading, setLoading] = useState(false);
 
-  const submit = async (event: FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
     try {
       if (!isDesktopRuntime()) {
-        username === "admin" && password === "admin" ? onLogin() : toast("نام کاربری یا رمز عبور درست نیست.", "error");
+        if (username === "admin" && password === "admin") onLogin();
+        else toast("نام کاربری یا رمز عبور درست نیست.", "error");
         return;
       }
       const ok = await invoke<boolean>("login", { input: { username, password } });
@@ -373,11 +300,13 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
       <main className="grid min-h-screen place-items-center px-5 py-8">
         <section className="login-card w-full max-w-[980px] overflow-hidden rounded-[28px] border border-warm-100 bg-paper shadow-soft md:grid md:grid-cols-[1fr_420px]">
           <div className="relative hidden min-h-[560px] overflow-hidden bg-[var(--primary)] p-9 text-white md:block">
+            <div className="luxury-panel-line absolute left-0 top-14 h-px w-64" />
+            <div className="luxury-panel-line absolute bottom-20 right-0 h-px w-72 opacity-60" />
             <div className="relative z-10 flex h-full flex-col justify-between">
               <div>
                 <BrandLogo settings={settings} className="h-14 w-14 rounded-card" />
                 <h1 className="mt-8 text-4xl font-bold leading-[1.45]">Dietoy</h1>
-                <p className="mt-4 max-w-sm text-sm leading-8 text-white/78">پرونده‌ها، محاسبات، وقت‌های بعدی و پشتیبان‌گیری روی همین دستگاه می‌ماند.</p>
+                <p className="mt-4 max-w-sm text-sm leading-8 text-white/78">پرونده‌ها، محاسبات و پشتیبان‌گیری روی همین دستگاه می‌ماند؛ سریع، خصوصی و آماده کار روزانه.</p>
               </div>
               <div className="rounded-card border border-white/14 bg-white/10 p-5">
                 <p className="text-sm font-semibold">ورود اولیه</p>
@@ -387,16 +316,14 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
             </div>
           </div>
           <form onSubmit={submit} className="p-7 md:p-9">
-            <p className="text-sm font-semibold text-olive">Dietoy</p>
+            <p className="text-sm font-semibold text-olive">آیدا جان</p>
             <h2 className="mt-3 text-3xl font-bold">خوش آمدید</h2>
             <p className="mt-3 text-sm leading-7 text-warm-500">برای دسترسی به اطلاعات مراجعین وارد شوید.</p>
             <div className="mt-8 grid gap-5">
               <IconInput icon={UserRound} label="نام کاربری" value={username} onChange={setUsername} autoComplete="username" />
               <IconInput icon={KeyRound} label="رمز عبور" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
             </div>
-            <div className="mt-8">
-              <PrimaryButton icon={KeyRound} type="submit">{loading ? "در حال ورود..." : "ورود به برنامه"}</PrimaryButton>
-            </div>
+            <div className="mt-8"><PrimaryButton icon={KeyRound} type="submit">{loading ? "در حال ورود..." : "ورود به برنامه"}</PrimaryButton></div>
           </form>
         </section>
       </main>
@@ -405,49 +332,23 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
   );
 }
 
-function Dashboard({ version, settings, onNew, onCalculations, onEdit }: { version: number; settings: Settings; onNew: () => void; onCalculations: () => void; onEdit: (client: Client) => void }) {
+function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version: number; settings: Settings; onNew: () => void; onCalculator: () => void; onEdit: (client: Client) => void }) {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [filter, setFilter] = useState("today");
-  const [exactDate, setExactDate] = useState(todayIsoDate());
-  const [range, setRange] = useState({ from: todayIsoDate(), to: addDaysIso(7) });
-
   useEffect(() => {
     if (!isDesktopRuntime()) {
       setStats({ total_clients: 0, active_clients: 0, recent_clients: [] });
-      setClients([]);
       return;
     }
     setStats(null);
-    invoke<DashboardStats>("dashboard_stats")
-      .then(setStats)
-      .catch(() => setStats({ total_clients: 0, active_clients: 0, recent_clients: [] }));
-    invoke<Client[]>("list_clients", { includeArchived: false })
-      .then((items) => setClients(items.map(normalizeClient)))
-      .catch(() => setClients([]));
+    invoke<DashboardStats>("dashboard_stats").then(setStats).catch(() => setStats({ total_clients: 0, active_clients: 0, recent_clients: [] }));
   }, [version]);
-
-  const appointmentItems = useMemo(() => {
-    const today = todayIsoDate();
-    return clients
-      .filter((client) => {
-        const date = client.next_visit_date || "";
-        if (!date) return false;
-        if (filter === "today") return date === today;
-        if (filter === "week") return date >= today && date <= addDaysIso(7);
-        if (filter === "month") return date.slice(0, 7) === today.slice(0, 7);
-        if (filter === "exact") return date === exactDate;
-        if (filter === "range") return date >= range.from && date <= range.to;
-        return true;
-      })
-      .sort((a, b) => (a.next_visit_date || "").localeCompare(b.next_visit_date || ""));
-  }, [clients, filter, exactDate, range]);
 
   return (
     <>
       <PageHeader
-        title={settings.dietitian_name ? `سلام، ${settings.dietitian_name}` : "داشبورد روزانه"}
-        subtitle={`امروز ${formatPersianDate()} است. مراجعات، پرونده‌ها و محاسبات تغذیه‌ای اینجا مدیریت می‌شوند.`}
+        title={settings.dietitian_name ? `سلام، ${settings.dietitian_name}` : "روز آرامی برای مراقبت بهتر"}
+        subtitle={`امروز ${formatPersianDate()} است. پرونده مراجعین و محاسبات تغذیه‌ای شما روی همین دستگاه ذخیره می‌شود.`}
+        action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>}
       />
       <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="card p-6 md:p-8">
@@ -455,13 +356,13 @@ function Dashboard({ version, settings, onNew, onCalculations, onEdit }: { versi
             <div>
               <p className="text-sm font-semibold text-olive">اقدام سریع</p>
               <h2 className="mt-3 text-2xl font-bold">شروع ویزیت بدون شلوغی</h2>
-              <p className="mt-3 max-w-xl text-sm leading-7 text-warm-500">پرونده جدید بسازید یا مستقیماً وارد محاسبات انرژی، IBW، ABW، BMR، TEE و ماکروها شوید.</p>
+              <p className="mt-3 max-w-xl text-sm leading-7 text-warm-500">برای ثبت پرونده تازه یا محاسبه سریع نیاز انرژی و ماکروها، همین‌جا شروع کنید.</p>
             </div>
             <Sparkles className="text-sage" size={28} />
           </div>
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             <PrimaryButton icon={Plus} onClick={onNew}>ثبت مراجع</PrimaryButton>
-            <SecondaryButton icon={Calculator} onClick={onCalculations}>محاسبات</SecondaryButton>
+            <SecondaryButton icon={Calculator} onClick={onCalculator}>ماشین حساب</SecondaryButton>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-4">
@@ -470,58 +371,10 @@ function Dashboard({ version, settings, onNew, onCalculations, onEdit }: { versi
         </div>
       </section>
       <section className="card mt-5 p-6">
-        <div className="mb-5 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-          <div>
-            <h2 className="text-xl font-bold">تقویم مراجعات</h2>
-            <p className="helper mt-1">وقت‌های موقت زرد و وقت‌های قطعی سبز هستند.</p>
-          </div>
-          <div className="grid gap-2 md:grid-cols-3 xl:w-[620px]">
-            <SelectPlain value={filter} onChange={setFilter} options={{ today: "امروز", week: "این هفته", month: "این ماه", exact: "تاریخ دقیق", range: "بازه دلخواه", all: "همه" }} />
-            {filter === "exact" && <DateField label="تاریخ" value={exactDate} onChange={setExactDate} compact />}
-            {filter === "range" && (
-              <>
-                <DateField label="از" value={range.from} onChange={(value) => setRange({ ...range, from: value })} compact />
-                <DateField label="تا" value={range.to} onChange={(value) => setRange({ ...range, to: value })} compact />
-              </>
-            )}
-          </div>
-        </div>
-        {appointmentItems.length === 0 ? (
-          <EmptyState icon={CalendarDays} title="مراجعه‌ای در این بازه نیست" text="از پرونده مراجع، تاریخ مراجعه بعدی و وضعیت وقت را ثبت کنید." />
-        ) : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {appointmentItems.map((client) => <AppointmentCard key={client.id} client={client} onClick={() => onEdit(client)} />)}
-          </div>
-        )}
-      </section>
-      <section className="card mt-5 p-6">
-        <div className="mb-5 flex items-center justify-between">
-          <h2 className="text-xl font-bold">مراجعین اخیر</h2>
-          <Users className="text-sage" size={22} />
-        </div>
-        {!stats ? <SkeletonRows /> : stats.recent_clients.length === 0 ? (
-          <EmptyState icon={Users} title="هنوز مراجعی ثبت نشده" text="اولین پرونده را بسازید تا این بخش زنده شود." />
-        ) : (
-          <div className="grid gap-3">
-            {stats.recent_clients.map((client) => <ClientRow key={client.id} client={normalizeClient(client)} onEdit={() => onEdit(normalizeClient(client))} />)}
-          </div>
-        )}
+        <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">مراجعین اخیر</h2><Users className="text-sage" size={22} /></div>
+        {!stats ? <SkeletonRows /> : stats.recent_clients.length === 0 ? <EmptyState icon={Users} title="هنوز مراجعی ثبت نشده" text="اولین پرونده را بسازید تا این بخش زنده شود." /> : <div className="grid gap-3">{stats.recent_clients.map((client) => <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} />)}</div>}
       </section>
     </>
-  );
-}
-
-function AppointmentCard({ client, onClick }: { client: Client; onClick: () => void }) {
-  const confirmed = client.next_visit_status === "confirmed";
-  return (
-    <button onClick={onClick} className={cn("rounded-card border p-4 text-right soft-transition hover:shadow-soft", confirmed ? "border-emerald/30 bg-emerald/10" : "border-amber-200 bg-amber-50")}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-bold">{client.full_name}</span>
-        <span className={cn("rounded-full px-3 py-1 text-xs font-semibold", confirmed ? "bg-emerald/15 text-emerald" : "bg-amber-100 text-amber-700")}>{confirmed ? "قطعی" : "موقت"}</span>
-      </div>
-      <p className="mt-2 text-xs text-warm-500">{formatPersianDate(client.next_visit_date || todayIsoDate())}</p>
-      {client.phone && <p className="numbers mt-2 text-xs text-warm-500">{client.phone}</p>}
-    </button>
   );
 }
 
@@ -529,7 +382,6 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
   const [clients, setClients] = useState<Client[] | null>(null);
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
-  const [goalFilter, setGoalFilter] = useState<GoalFilter>("all");
 
   useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -537,32 +389,15 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
       return;
     }
     setClients(null);
-    invoke<Client[]>("list_clients", { includeArchived })
-      .then((items) => setClients(items.map(normalizeClient)))
-      .catch(() => setClients([]));
+    invoke<Client[]>("list_clients", { includeArchived }).then(setClients).catch(() => setClients([]));
   }, [version, includeArchived]);
-
-  const goalCounts = useMemo(() => {
-    const base = { all: 0, lose: 0, maintain: 0, gain: 0 } as Record<GoalFilter, number>;
-    for (const client of clients ?? []) {
-      if (!client.archived || includeArchived) {
-        base.all += 1;
-        base[client.goal] += 1;
-      }
-    }
-    return base;
-  }, [clients, includeArchived]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return (clients ?? []).filter((client) => {
-      const matchesGoal = goalFilter === "all" || client.goal === goalFilter;
-      const matchesQuery = [client.full_name, client.phone, client.email]
-        .some((value) => value.toLowerCase().includes(needle));
-      return matchesGoal && matchesQuery;
-    });
-  }, [clients, query, goalFilter]);
-
+    return (clients ?? []).filter((client) =>
+      [client.full_name, client.phone, client.email].some((value) => value.toLowerCase().includes(needle)),
+    );
+  }, [clients, query]);
   const archive = async (client: Client) => {
     await invoke("archive_client", { id: client.id, archived: !client.archived });
     toast(client.archived ? "مراجع فعال شد." : "مراجع بایگانی شد.");
@@ -571,103 +406,365 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
 
   return (
     <>
-      <PageHeader title="مراجعین" subtitle="جست‌وجو، گروه‌بندی بر اساس هدف، ویرایش و محاسبه برای هر مراجع." action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>} />
+      <PageHeader title="مراجعین" subtitle="جست‌وجو، ویرایش و مدیریت پرونده‌ها با تمرکز روی اطلاعات لازم در ویزیت." action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>} />
       <section className="card p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={20} />
-            <input className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی نام، موبایل یا ایمیل" />
+            <input className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی نام مراجع" />
           </div>
           <label className="flex h-12 items-center gap-2 rounded-control border border-warm-100 bg-warm-50 px-4 text-sm text-warm-500">
             <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
             نمایش بایگانی
           </label>
         </div>
-
-        <div className="mt-4 grid gap-2 md:grid-cols-4">
-          <GoalFilterButton label="همه" count={goalCounts.all} active={goalFilter === "all"} onClick={() => setGoalFilter("all")} />
-          <GoalFilterButton label={goalLabels.lose} count={goalCounts.lose} active={goalFilter === "lose"} onClick={() => setGoalFilter("lose")} />
-          <GoalFilterButton label={goalLabels.maintain} count={goalCounts.maintain} active={goalFilter === "maintain"} onClick={() => setGoalFilter("maintain")} />
-          <GoalFilterButton label={goalLabels.gain} count={goalCounts.gain} active={goalFilter === "gain"} onClick={() => setGoalFilter("gain")} />
-        </div>
-
         <div className="mt-5 grid gap-3">
-          {!clients ? <SkeletonRows /> : filtered.length === 0 ? (
-            <EmptyState icon={Search} title="موردی پیدا نشد" text="فیلتر هدف یا عبارت جست‌وجو را تغییر دهید." />
-          ) : (
-            filtered.map((client) => (
-              <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} onCalculate={() => onCalculate(client)} onArchive={() => archive(client)} />
-            ))
-          )}
+          {!clients ? <SkeletonRows /> : filtered.length === 0 ? <EmptyState icon={Search} title="موردی پیدا نشد" text="نام را تغییر دهید یا مراجع جدید ثبت کنید." /> : filtered.map((client) => (
+            <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} onCalculate={() => onCalculate(client)} onArchive={() => archive(client)} />
+          ))}
         </div>
       </section>
     </>
   );
 }
 
-function GoalFilterButton({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "soft-transition rounded-control border px-4 py-3 text-right text-sm",
-        active ? "border-[var(--primary)] bg-[var(--primary)] text-white shadow-lift" : "border-warm-100 bg-warm-50 text-warm-600 hover:bg-paper",
-      )}
-    >
-      <span className="block font-bold">{label}</span>
-      <span className="numbers mt-1 block text-xs opacity-80">{formatNumber(count)} مراجع</span>
-    </button>
-  );
-}
+function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client | null; onBack: () => void; onSaved: (client: Client) => void; toast: ToastFn }) {
+  const [form, setForm] = useState<Client>(client ?? { ...emptyClient });
+  const [records, setRecords] = useState<ClientRecord[]>([]);
+  const [visits, setVisits] = useState<VisitDetail[]>([]);
+  const [activeTab, setActiveTab] = useState<ProfileTab>(client ? "summary" : "base");
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [topError, setTopError] = useState("");
+  const [visitForm, setVisitForm] = useState({
+    visit_date: todayIsoDate(),
+    visit_time: "",
+    status: "completed",
+    reason: "",
+    weight_kg: client?.weight_kg ?? emptyClient.weight_kg,
+    height_cm: client?.height_cm ?? emptyClient.height_cm,
+    notes: "",
+    next_visit_enabled: false,
+    next_visit_date: "",
+    next_visit_time: "",
+    next_visit_status: "scheduled",
+  });
 
-function ClientRow({ client, onEdit, onCalculate, onArchive }: { client: Client; onEdit: () => void; onCalculate?: () => void; onArchive?: () => void }) {
-  return (
-    <div className="card flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
-      <div className="flex items-center gap-3">
-        <ProfileAvatar client={client} />
-        <div>
-          <p className="font-bold">{client.full_name}</p>
-          <p className="mt-1 text-xs text-warm-500">{genderLabels[client.gender]} · {formatNumber(client.age)} سال · {goalLabels[client.goal]}</p>
-          {client.next_visit_date && <p className="mt-1 text-xs text-olive">مراجعه بعدی: {formatPersianDate(client.next_visit_date)} · {client.next_visit_status === "confirmed" ? "قطعی" : "موقت"}</p>}
+  const resetVisitForm = (source?: Client) => {
+    setVisitForm({
+      visit_date: todayIsoDate(),
+      visit_time: "",
+      status: "completed",
+      reason: "",
+      weight_kg: source?.weight_kg ?? emptyClient.weight_kg,
+      height_cm: source?.height_cm ?? emptyClient.height_cm,
+      notes: "",
+      next_visit_enabled: false,
+      next_visit_date: "",
+      next_visit_time: "",
+      next_visit_status: "scheduled",
+    });
+  };
+
+  useEffect(() => {
+    setForm(client ?? { ...emptyClient });
+    setActiveTab(client ? "summary" : "base");
+    setErrors({});
+    setTopError("");
+    resetVisitForm(client ?? undefined);
+  }, [client]);
+
+  useEffect(() => {
+    if (!client?.id || !isDesktopRuntime()) {
+      setRecords([]);
+      setVisits([]);
+      return;
+    }
+    invoke<VisitDetail[]>("list_client_visits", { clientId: client.id })
+      .then((items) => {
+        setVisits(items);
+        setRecords(
+          items
+            .filter((item) => item.measurements?.weight_kg)
+            .map((item) => ({
+              id: item.measurements?.id,
+              client_id: client.id!,
+              record_date: item.visit.visit_date,
+              weight_kg: item.measurements?.weight_kg ?? client.weight_kg,
+              height_cm: item.measurements?.height_cm ?? client.height_cm,
+              notes: item.measurements?.notes || item.visit.clinical_notes,
+              created_at: item.visit.created_at,
+              updated_at: item.visit.updated_at,
+            })),
+        );
+      })
+      .catch(() => {
+        invoke<ClientRecord[]>("list_client_records", { clientId: client.id }).then(setRecords).catch(() => setRecords([]));
+      });
+  }, [client]);
+
+  const setField = <K extends keyof Client>(key: K, value: Client[K]) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    setErrors((current) => ({ ...current, [key]: undefined }));
+  };
+
+  const validateClient = () => {
+    const nextErrors: FieldErrors = {};
+    if (!form.full_name.trim()) nextErrors.full_name = "نام کامل مراجعه‌کننده الزامی است.";
+    if (!Number.isFinite(form.age) || form.age < 1 || form.age > 120) nextErrors.age = "سن باید عددی بین ۱ تا ۱۲۰ باشد.";
+    if (!Number.isFinite(form.height_cm) || form.height_cm < 40 || form.height_cm > 250) nextErrors.height_cm = "قد باید عددی بین ۴۰ تا ۲۵۰ سانتی‌متر باشد.";
+    if (!Number.isFinite(form.weight_kg) || form.weight_kg < 1 || form.weight_kg > 400) nextErrors.weight_kg = "وزن باید عددی بین ۱ تا ۴۰۰ کیلوگرم باشد.";
+    if (/[\r\n]/.test(form.profile_image_path)) nextErrors.profile_image_path = "مسیر عکس پروفایل معتبر نیست.";
+    setErrors(nextErrors);
+    return nextErrors;
+  };
+
+  const validateVisit = () => {
+    const nextErrors: FieldErrors = {};
+    if (!isValidIsoDate(visitForm.visit_date)) nextErrors.visit_date = "تاریخ ویزیت باید با قالب yyyy/mm/dd وارد شود.";
+    if (visitForm.visit_time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(visitForm.visit_time)) nextErrors.visit_time = "ساعت ویزیت باید با قالب HH:mm باشد.";
+    if (!Number.isFinite(visitForm.weight_kg) || visitForm.weight_kg < 1 || visitForm.weight_kg > 400) nextErrors.weight_kg = "وزن ویزیت باید عددی بین ۱ تا ۴۰۰ کیلوگرم باشد.";
+    if (!Number.isFinite(visitForm.height_cm) || visitForm.height_cm < 40 || visitForm.height_cm > 250) nextErrors.height_cm = "قد ویزیت باید عددی بین ۴۰ تا ۲۵۰ سانتی‌متر باشد.";
+    if (visitForm.next_visit_enabled && !isValidIsoDate(visitForm.next_visit_date)) nextErrors.next_visit_date = "برای مراجعه بعدی، تاریخ معتبر وارد کنید.";
+    setErrors(nextErrors);
+    return nextErrors;
+  };
+
+  const chooseProfileImage = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      const imported = isDesktopRuntime()
+        ? await invoke<string>("import_brand_asset", { path: selected, kind: "client-profile" })
+        : selected;
+      setField("profile_image_path", imported);
+      toast("عکس پروفایل انتخاب شد.");
+    } catch (error) {
+      const message = getErrorMessage(error, "انتخاب عکس انجام نشد.");
+      setTopError(message);
+      toast(message, "error");
+    }
+  };
+
+  const save = async () => {
+    const nextErrors = validateClient();
+    if (Object.keys(nextErrors).length) {
+      setTopError("پرونده ذخیره نشد؛ خطاهای مشخص‌شده را اصلاح کنید.");
+      toast("پرونده ذخیره نشد؛ خطاهای فرم را بررسی کنید.", "error");
+      return;
+    }
+    try {
+      const saved = isDesktopRuntime() ? await invoke<Client>("save_client", { client: form }) : form;
+      if (!client && saved.id && isDesktopRuntime()) {
+        await invoke<VisitDetail>("save_visit_with_measurements", {
+          visit: {
+            client_id: saved.id,
+            visit_date: todayIsoDate(),
+            visit_time: "",
+            status: "completed",
+            reason: "ثبت اولیه مراجعه",
+            clinical_notes: "ثبت اولیه مراجعه",
+            private_notes: "",
+            next_visit_enabled: false,
+            next_visit_date: "",
+            next_visit_time: "",
+            next_visit_status: "",
+            total_fee: 0,
+          },
+          measurements: {
+            weight_kg: saved.weight_kg,
+            height_cm: saved.height_cm,
+            notes: "ثبت اولیه مراجعه",
+          },
+        });
+      }
+      setTopError("");
+      onSaved(saved);
+      toast(client ? "پرونده ذخیره شد." : "مراجعه‌کننده جدید ثبت شد.");
+    } catch (error) {
+      const message = getErrorMessage(error, "ذخیره انجام نشد؛ علت نامشخص است.");
+      setTopError(message);
+      toast(message, "error");
+    }
+  };
+
+  const saveVisit = async () => {
+    if (!client?.id) {
+      setTopError("اول پرونده مراجعه‌کننده را ذخیره کنید، سپس ویزیت ثبت کنید.");
+      toast("اول پرونده مراجعه‌کننده را ذخیره کنید.", "error");
+      return;
+    }
+    const nextErrors = validateVisit();
+    if (Object.keys(nextErrors).length) {
+      setTopError("ویزیت ثبت نشد؛ خطاهای مشخص‌شده را اصلاح کنید.");
+      toast("ویزیت ثبت نشد؛ خطاهای فرم را بررسی کنید.", "error");
+      return;
+    }
+    try {
+      const detail = await invoke<VisitDetail>("save_visit_with_measurements", {
+        visit: {
+          client_id: client.id,
+          visit_date: visitForm.visit_date,
+          visit_time: visitForm.visit_time,
+          status: visitForm.status,
+          reason: visitForm.reason,
+          clinical_notes: visitForm.notes,
+          private_notes: "",
+          next_visit_enabled: visitForm.next_visit_enabled,
+          next_visit_date: visitForm.next_visit_enabled ? visitForm.next_visit_date : "",
+          next_visit_time: visitForm.next_visit_enabled ? visitForm.next_visit_time : "",
+          next_visit_status: visitForm.next_visit_enabled ? visitForm.next_visit_status : "",
+          total_fee: 0,
+        },
+        measurements: {
+          weight_kg: visitForm.weight_kg,
+          height_cm: visitForm.height_cm,
+          notes: visitForm.notes,
+        },
+      });
+      const record = {
+        id: detail.measurements?.id,
+        client_id: client.id,
+        record_date: detail.visit.visit_date,
+        weight_kg: detail.measurements?.weight_kg ?? visitForm.weight_kg,
+        height_cm: detail.measurements?.height_cm ?? visitForm.height_cm,
+        notes: detail.measurements?.notes ?? visitForm.notes,
+        created_at: detail.visit.created_at,
+        updated_at: detail.visit.updated_at,
+      };
+      setVisits((items) => [...items, detail].sort((a, b) => a.visit.visit_date.localeCompare(b.visit.visit_date)));
+      setRecords((items) => [...items, record].sort((a, b) => a.record_date.localeCompare(b.record_date)));
+      const updatedClient = { ...form, weight_kg: record.weight_kg, height_cm: record.height_cm };
+      setForm(updatedClient);
+      await invoke<Client>("save_client", { client: updatedClient });
+      resetVisitForm(updatedClient);
+      setTopError("");
+      toast("ویزیت ثبت شد.");
+    } catch (error) {
+      const message = getErrorMessage(error, "ثبت ویزیت انجام نشد؛ علت نامشخص است.");
+      setTopError(message);
+      toast(message, "error");
+    }
+  };
+
+  const latestRecord = records.length ? records[records.length - 1] : undefined;
+  const previousRecord = records.length > 1 ? records[records.length - 2] : undefined;
+  const weightDelta = latestRecord && previousRecord ? latestRecord.weight_kg - previousRecord.weight_kg : null;
+  const latestVisit = visits.length ? visits[visits.length - 1] : undefined;
+  const latestBmi = latestRecord ? latestRecord.weight_kg / Math.pow(latestRecord.height_cm / 100, 2) : null;
+
+  const baseInfo = (
+    <div className="grid gap-5 md:grid-cols-2">
+      <div className="md:col-span-2 flex flex-col gap-4 rounded-card border border-warm-100 bg-warm-50 p-4 sm:flex-row sm:items-center">
+        <ProfileAvatar client={form} size="lg" />
+        <div className="flex-1">
+          <p className="text-sm font-bold">عکس پروفایل مراجعه‌کننده</p>
+          <p className="helper mt-1">برای شناسایی سریع‌تر در پرونده و لیست مراجعه‌کنندگان.</p>
+          {errors.profile_image_path && <FieldError text={errors.profile_image_path} />}
         </div>
+        <SecondaryButton icon={Camera} onClick={chooseProfileImage}>انتخاب عکس</SecondaryButton>
       </div>
-      <div className="flex flex-wrap gap-2">
-        <SecondaryButton icon={ClipboardList} onClick={onEdit}>ویرایش</SecondaryButton>
-        {onCalculate && <SecondaryButton icon={Calculator} onClick={onCalculate}>محاسبات</SecondaryButton>}
-        {onArchive && <SecondaryButton icon={Archive} onClick={onArchive}>{client.archived ? "فعال‌سازی" : "بایگانی"}</SecondaryButton>}
+      <TextField label="نام کامل" value={form.full_name} onChange={(value) => setField("full_name", value)} error={errors.full_name} />
+      <TextField label="شماره تماس" value={form.phone} onChange={(value) => setField("phone", value)} placeholder="مثلا 09123456789" />
+      <TextField label="ایمیل" value={form.email} onChange={(value) => setField("email", value)} placeholder="name@example.com" />
+      <SelectField label="جنسیت" value={form.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
+      <NumberField label="سن" value={form.age} onChange={(value) => setField("age", value)} suffix="سال" error={errors.age} />
+      <NumberField label="قد" value={form.height_cm} onChange={(value) => setField("height_cm", value)} suffix="سانتی‌متر" error={errors.height_cm} />
+      <NumberField label="وزن" value={form.weight_kg} onChange={(value) => setField("weight_kg", value)} suffix="کیلوگرم" error={errors.weight_kg} />
+      <SelectField label="سطح فعالیت" value={form.activity_level} onChange={(value) => setField("activity_level", value as ActivityLevel)} options={activityLabels} />
+      <SelectField label="هدف" value={form.goal} onChange={(value) => setField("goal", value as Goal)} options={goalLabels} />
+      <div className="md:col-span-2">
+        <label className="label">یادداشت پرونده</label>
+        <textarea className="control mt-2 min-h-32 w-full py-3" value={form.notes} onChange={(event) => setField("notes", event.target.value)} />
       </div>
     </div>
   );
-}
 
-function ProfileAvatar({ client, size = "md" }: { client: Client; size?: "md" | "lg" }) {
-  const src = assetUrl(client.profile_image_path);
-  const className = size === "lg" ? "h-20 w-20" : "h-12 w-12";
-  if (src) return <img src={src} className={cn("rounded-control object-cover", className)} alt={client.full_name} />;
-  return <div className={cn("grid place-items-center rounded-control bg-warm-50 text-sage", className)}><UserRound size={size === "lg" ? 34 : 22} /></div>;
+  const visitsPanel = client?.id ? (
+    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
+        <div className="flex items-center gap-2">
+          <ClipboardList size={21} className="text-sage" />
+          <h2 className="text-lg font-bold">ثبت ویزیت</h2>
+        </div>
+        <p className="helper mt-2">هر ویزیت می‌تواند اندازه‌گیری، یادداشت و مراجعه بعدی اختیاری داشته باشد.</p>
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => setVisitForm({ ...visitForm, visit_date: value })} error={errors.visit_date} />
+          <TextField label="ساعت" value={visitForm.visit_time} onChange={(value) => setVisitForm({ ...visitForm, visit_time: value })} placeholder="09:30" error={errors.visit_time} />
+          <SelectField label="وضعیت" value={visitForm.status} onChange={(value) => setVisitForm({ ...visitForm, status: value })} options={{ completed: "انجام شد", scheduled: "برنامه‌ریزی شده", canceled: "لغو شد" }} />
+          <TextField label="دلیل مراجعه" value={visitForm.reason} onChange={(value) => setVisitForm({ ...visitForm, reason: value })} />
+          <NumberField label="وزن" value={visitForm.weight_kg} onChange={(value) => setVisitForm({ ...visitForm, weight_kg: value })} suffix="کیلوگرم" error={errors.weight_kg} />
+          <NumberField label="قد" value={visitForm.height_cm} onChange={(value) => setVisitForm({ ...visitForm, height_cm: value })} suffix="سانتی‌متر" error={errors.height_cm} />
+          <div className="sm:col-span-2 rounded-control border border-warm-100 bg-white p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <input type="checkbox" checked={visitForm.next_visit_enabled} onChange={(event) => setVisitForm({ ...visitForm, next_visit_enabled: event.target.checked, next_visit_date: event.target.checked ? visitForm.next_visit_date || todayIsoDate() : "" })} />
+              مراجعه بعدی دارد؟
+            </label>
+            {visitForm.next_visit_enabled && (
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                <DateField label="تاریخ بعدی" value={visitForm.next_visit_date || todayIsoDate()} onChange={(value) => setVisitForm({ ...visitForm, next_visit_date: value })} error={errors.next_visit_date} />
+                <TextField label="ساعت" value={visitForm.next_visit_time} onChange={(value) => setVisitForm({ ...visitForm, next_visit_time: value })} placeholder="اختیاری" />
+                <SelectField label="وضعیت" value={visitForm.next_visit_status} onChange={(value) => setVisitForm({ ...visitForm, next_visit_status: value })} options={{ scheduled: "برنامه‌ریزی شده", pending: "در انتظار", done: "انجام شد" }} />
+              </div>
+            )}
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">یادداشت ویزیت</label>
+            <textarea className="control mt-2 min-h-24 w-full py-3" value={visitForm.notes} onChange={(event) => setVisitForm({ ...visitForm, notes: event.target.value })} />
+          </div>
+        </div>
+        <div className="mt-5"><SecondaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</SecondaryButton></div>
+      </div>
+      <div className="rounded-card border border-warm-100 bg-white p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2"><CalendarDays size={21} className="text-sage" /><h2 className="text-lg font-bold">ویزیت‌ها</h2></div>
+          <span className="text-xs text-warm-500">{formatNumber(visits.length || records.length)} ویزیت</span>
+        </div>
+        {records.length === 0 ? <EmptyState icon={CalendarDays} title="هنوز ویزیتی ثبت نشده" text="اولین ویزیت را از فرم کنار صفحه ثبت کنید." /> : <WeightHistory records={records} />}
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <>
+      <PageHeader title={client ? "پرونده مراجعه‌کننده" : "مراجعه‌کننده جدید"} subtitle={client ? "اطلاعات، ویزیت‌ها و روند تغییرات مراجعه‌کننده را یکجا ببینید." : "اطلاعات پایه برای محاسبه انرژی و پیگیری ویزیت را وارد کنید."} action={<PrimaryButton icon={Save} onClick={save}>ذخیره پرونده</PrimaryButton>} />
+      <section className="card p-6">
+        {topError && <ErrorSummary message={topError} />}
+        {client?.id && (
+          <div className="mb-6 flex flex-wrap gap-2 border-b border-warm-100 pb-4">
+            <TabButton active={activeTab === "summary"} onClick={() => setActiveTab("summary")}>خلاصه</TabButton>
+            <TabButton active={activeTab === "visits"} onClick={() => setActiveTab("visits")}>ویزیت‌ها</TabButton>
+            <TabButton active={activeTab === "base"} onClick={() => setActiveTab("base")}>اطلاعات پایه</TabButton>
+          </div>
+        )}
+        {!client?.id || activeTab === "base" ? baseInfo : null}
+        {client?.id && activeTab === "summary" && (
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+            <ResultCard title="آخرین وزن" value={latestRecord ? formatNumber(latestRecord.weight_kg, 1) : "—"} unit="کیلوگرم" text={latestRecord ? formatPersianDate(latestRecord.record_date) : "هنوز ویزیتی ثبت نشده است."} />
+            <ResultCard title="تغییر وزن" value={weightDelta === null ? "—" : formatNumber(weightDelta, 1)} unit="کیلوگرم" text="نسبت به ویزیت قبلی." />
+            <ResultCard title="BMI" value={latestBmi ? formatNumber(latestBmi, 1) : "—"} unit={latestBmi ? bmiCategory(latestBmi) : "بدون داده"} text="بر اساس آخرین اندازه‌گیری." featured />
+            <ResultCard title="مراجعه بعدی" value={latestVisit?.visit.next_visit_enabled && latestVisit.visit.next_visit_date ? isoToJalaliInput(latestVisit.visit.next_visit_date) : "—"} unit={latestVisit?.visit.next_visit_time || ""} text={latestVisit?.visit.next_visit_enabled ? "از آخرین ویزیت ثبت شده." : "برای این مراجعه زمان بعدی ثبت نشده است."} />
+          </div>
+        )}
+        {client?.id && activeTab === "visits" ? visitsPanel : null}
+        <div className="mt-6"><SecondaryButton onClick={onBack}>بازگشت به فهرست</SecondaryButton></div>
+      </section>
+    </>
+  );
 }
 
 function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null; onBack: () => void; onSaved: (client: Client) => void; toast: ToastFn }) {
-  const [form, setForm] = useState<Client>(client ? normalizeClient(client) : { ...emptyClient });
+  const [form, setForm] = useState<Client>(client ?? emptyClient);
   const [records, setRecords] = useState<ClientRecord[]>([]);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [selectedAttachment, setSelectedAttachment] = useState<Attachment | null>(null);
-  const [attachmentForm, setAttachmentForm] = useState({ category: "body_analysis" as AttachmentCategory, title: "", attachment_date: todayIsoDate(), notes: "" });
-  const [visits, setVisits] = useState<Visit[]>([]);
-  const [selectedVisitId, setSelectedVisitId] = useState<number | "">("");
-  const [visitForm, setVisitForm] = useState({ visit_date: todayIsoDate(), visit_time: "09:00", status: "done" as VisitStatus, notes: "" });
-  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
-  const [visitServices, setVisitServices] = useState<VisitService[]>([]);
-  const [visitServiceForm, setVisitServiceForm] = useState({ service_id: "", service_name_snapshot: "", price: 0, quantity: 1, notes: "" });
   const [recordForm, setRecordForm] = useState({
     record_date: todayIsoDate(),
     weight_kg: client?.weight_kg ?? emptyClient.weight_kg,
     height_cm: client?.height_cm ?? emptyClient.height_cm,
     notes: "",
   });
-
-  useEffect(() => setForm(client ? normalizeClient(client) : { ...emptyClient }), [client]);
-
+  useEffect(() => setForm(client ?? emptyClient), [client]);
   useEffect(() => {
     setRecordForm({
       record_date: todayIsoDate(),
@@ -675,55 +772,39 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
       height_cm: client?.height_cm ?? emptyClient.height_cm,
       notes: "",
     });
-    setSelectedAttachment(null);
-    setSelectedVisitId("");
-    setVisitServices([]);
     if (!client?.id || !isDesktopRuntime()) {
       setRecords([]);
-      setAttachments([]);
-      setVisits([]);
-      setServiceCatalog([]);
       return;
     }
-    invoke<ClientRecord[]>("list_client_records", { clientId: client.id }).then(setRecords).catch(() => setRecords([]));
-    invoke<Attachment[]>("list_attachments", { clientId: client.id, category: null }).then(setAttachments).catch(() => setAttachments([]));
-    invoke<Visit[]>("list_visits", { clientId: client.id }).then((items) => { setVisits(items); if (items[0]?.id) setSelectedVisitId(items[0].id); }).catch(() => setVisits([]));
-    invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: true }).then(setServiceCatalog).catch(() => setServiceCatalog([]));
+    invoke<ClientRecord[]>("list_client_records", { clientId: client.id })
+      .then(setRecords)
+      .catch(() => setRecords([]));
   }, [client]);
 
-  useEffect(() => {
-    if (!selectedVisitId || !isDesktopRuntime()) {
-      setVisitServices([]);
-      return;
-    }
-    invoke<VisitService[]>("list_visit_services", { visitId: selectedVisitId }).then(setVisitServices).catch(() => setVisitServices([]));
-  }, [selectedVisitId]);
-
-  const bodyAnalysisFiles = attachments.filter((item) => item.category === "body_analysis");
-  const otherAttachments = attachments.filter((item) => item.category !== "body_analysis");
-  const selectedVisit = visits.find((visit) => visit.id === selectedVisitId);
-
   const setField = <K extends keyof Client>(key: K, value: Client[K]) => setForm((current) => ({ ...current, [key]: value }));
-
   const chooseProfileImage = async () => {
     try {
-      const selected = await open({ multiple: false, filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }] });
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
+      });
       if (!selected || Array.isArray(selected)) return;
-      const imported = isDesktopRuntime() ? await invoke<string>("import_brand_asset", { path: selected, kind: "client-profile" }) : selected;
+      const imported = isDesktopRuntime()
+        ? await invoke<string>("import_brand_asset", { path: selected, kind: "client-profile" })
+        : selected;
       setField("profile_image_path", imported);
       toast("عکس پروفایل انتخاب شد.");
     } catch {
       toast("انتخاب عکس انجام نشد.", "error");
     }
   };
-
   const save = async () => {
     if (!form.full_name.trim()) {
       toast("نام مراجع را وارد کنید.", "error");
       return;
     }
     try {
-      const saved = await invoke<Client>("save_client", { client: normalizeClient(form) });
+      const saved = await invoke<Client>("save_client", { client: form });
       if (!client && saved.id) {
         await invoke<ClientRecord>("save_client_record", {
           record: {
@@ -735,7 +816,7 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
           },
         });
       }
-      onSaved(normalizeClient(saved));
+      onSaved(saved);
       toast(client ? "پرونده ذخیره شد." : "مراجع جدید ثبت شد.");
     } catch {
       toast("ذخیره انجام نشد.", "error");
@@ -760,221 +841,331 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
       setRecords((items) => [...items, record].sort((a, b) => a.record_date.localeCompare(b.record_date)));
       const updatedClient = { ...form, weight_kg: record.weight_kg, height_cm: record.height_cm };
       setForm(updatedClient);
-      await invoke<Client>("save_client", { client: normalizeClient(updatedClient) });
-      toast("رکورد جدید اضافه شد.");
+      await invoke<Client>("save_client", { client: updatedClient });
+      setRecordForm({ record_date: todayIsoDate(), weight_kg: record.weight_kg, height_cm: record.height_cm, notes: "" });
+      toast("رکورد ویزیت ثبت شد.");
     } catch {
       toast("ثبت رکورد انجام نشد.", "error");
     }
   };
 
-  const importAttachment = async () => {
-    if (!client?.id) {
-      toast("اول پرونده مراجع را ذخیره کنید.", "error");
-      return;
-    }
-    try {
-      const selected = await open({ multiple: false, filters: [{ name: "Files", extensions: ["pdf", "png", "jpg", "jpeg", "webp", "doc", "docx", "xls", "xlsx"] }] });
-      if (!selected || Array.isArray(selected)) return;
-      const attachment = await invoke<Attachment>("import_attachment", {
-        clientId: client.id,
-        visitId: selectedVisitId || null,
-        path: selected,
-        category: attachmentForm.category,
-        title: attachmentForm.title,
-        attachmentDate: attachmentForm.attachment_date,
-        notes: attachmentForm.notes,
-      });
-      setAttachments((items) => [attachment, ...items]);
-      setSelectedAttachment(attachment);
-      setAttachmentForm({ category: "body_analysis", title: "", attachment_date: todayIsoDate(), notes: "" });
-      toast("فایل به پرونده اضافه شد.");
-    } catch {
-      toast("افزودن فایل انجام نشد.", "error");
-    }
-  };
+  return (
+    <>
+      <PageHeader title={client ? "پرونده مراجع" : "مراجع جدید"} subtitle={client ? "اطلاعات، یادداشت‌ها و روند تغییرات مراجع را یکجا ببینید." : "اطلاعات پایه برای محاسبه انرژی و پیگیری ویزیت را وارد کنید."} action={<PrimaryButton icon={Save} onClick={save}>ذخیره پرونده</PrimaryButton>} />
+      <section className="card p-6">
+        <div className="grid gap-5 md:grid-cols-2">
+          <div className="md:col-span-2 flex flex-col gap-4 rounded-card border border-warm-100 bg-warm-50 p-4 sm:flex-row sm:items-center">
+            <ProfileAvatar client={form} size="lg" />
+            <div className="flex-1">
+              <p className="text-sm font-bold">عکس پروفایل مراجع</p>
+              <p className="helper mt-1">برای شناسایی سریع‌تر در پرونده و لیست مراجعین.</p>
+            </div>
+            <SecondaryButton icon={Camera} onClick={chooseProfileImage}>انتخاب عکس</SecondaryButton>
+          </div>
+          <TextField label="نام کامل" value={form.full_name} onChange={(value) => setField("full_name", value)} />
+          <TextField label="شماره تماس" value={form.phone} onChange={(value) => setField("phone", value)} placeholder="مثلا 09123456789" />
+          <TextField label="ایمیل" value={form.email} onChange={(value) => setField("email", value)} placeholder="name@example.com" />
+          <SelectField label="جنسیت" value={form.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
+          <NumberField label="سن" value={form.age} onChange={(value) => setField("age", value)} suffix="سال" />
+          <NumberField label="قد" value={form.height_cm} onChange={(value) => setField("height_cm", value)} suffix="سانتی‌متر" />
+          <NumberField label="وزن" value={form.weight_kg} onChange={(value) => setField("weight_kg", value)} suffix="کیلوگرم" />
+          <SelectField label="سطح فعالیت" value={form.activity_level} onChange={(value) => setField("activity_level", value as ActivityLevel)} options={activityLabels} />
+          <SelectField label="هدف" value={form.goal} onChange={(value) => setField("goal", value as Goal)} options={goalLabels} />
+          <div className="md:col-span-2">
+            <label className="label">یادداشت پرونده</label>
+            <textarea className="control mt-2 min-h-32 w-full py-3" value={form.notes} onChange={(event) => setField("notes", event.target.value)} />
+          </div>
+        </div>
+        {client?.id && (
+          <div className="mt-6 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+            <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
+              <div className="flex items-center gap-2">
+                <ClipboardList size={21} className="text-sage" />
+                <h2 className="text-lg font-bold">رکورد ویزیت امروز</h2>
+              </div>
+              <p className="helper mt-2">هر مراجعه جدید را با تاریخ خودش ثبت کنید تا روند وزن قابل پیگیری شود.</p>
+              <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                <DateField label="تاریخ" value={recordForm.record_date} onChange={(value) => setRecordForm({ ...recordForm, record_date: value })} />
+                <NumberField label="وزن" value={recordForm.weight_kg} onChange={(value) => setRecordForm({ ...recordForm, weight_kg: value })} suffix="کیلوگرم" />
+                <NumberField label="قد" value={recordForm.height_cm} onChange={(value) => setRecordForm({ ...recordForm, height_cm: value })} suffix="سانتی‌متر" />
+                <div className="sm:col-span-2">
+                  <label className="label">یادداشت ویزیت</label>
+                  <textarea className="control mt-2 min-h-24 w-full py-3" value={recordForm.notes} onChange={(event) => setRecordForm({ ...recordForm, notes: event.target.value })} />
+                </div>
+              </div>
+              <div className="mt-5"><SecondaryButton icon={Plus} onClick={saveRecord}>ثبت رکورد</SecondaryButton></div>
+            </div>
+            <div className="rounded-card border border-warm-100 bg-white p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2"><TrendingUp size={21} className="text-sage" /><h2 className="text-lg font-bold">روند وزن</h2></div>
+                <span className="text-xs text-warm-500">{formatNumber(records.length)} رکورد</span>
+              </div>
+              {records.length === 0 ? <EmptyState icon={CalendarDays} title="هنوز رکوردی ثبت نشده" text="اولین ویزیت را از فرم کنار صفحه ثبت کنید." /> : <WeightHistory records={records} />}
+            </div>
+          </div>
+        )}
+        <div className="mt-6"><SecondaryButton onClick={onBack}>بازگشت به فهرست</SecondaryButton></div>
+      </section>
+    </>
+  );
+}
 
-  const saveVisit = async () => {
-    if (!client?.id) {
-      toast("اول پرونده مراجع را ذخیره کنید.", "error");
-      return;
-    }
-    try {
-      const visit = await invoke<Visit>("save_visit", {
-        visit: {
-          client_id: client.id,
-          visit_date: `${visitForm.visit_date}T${visitForm.visit_time || "00:00"}`,
-          status: visitForm.status,
-          notes: visitForm.notes,
-          total_fee: 0,
-        },
-      });
-      setVisits((items) => [visit, ...items]);
-      if (visit.id) setSelectedVisitId(visit.id);
-      setVisitForm({ visit_date: todayIsoDate(), visit_time: "09:00", status: "done", notes: "" });
-      toast("ویزیت ثبت شد.");
-    } catch {
-      toast("ثبت ویزیت انجام نشد.", "error");
-    }
-  };
+function CalculatorScreen({ initialClient, toast }: { initialClient: Client | null; toast: ToastFn }) {
+  const [selected, setSelected] = useState<Client | null>(initialClient);
+  const [input, setInput] = useState<Client>(initialClient ?? emptyClient);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Client[]>([]);
+  const [overrides, setOverrides] = useState({ calories: "", protein: "", carbs: "", fat: "" });
 
-  const addVisitService = async () => {
-    if (!selectedVisitId) {
-      toast("اول یک ویزیت را انتخاب یا ثبت کنید.", "error");
-      return;
-    }
-    const selectedService = serviceCatalog.find((item) => String(item.id) === visitServiceForm.service_id);
-    const name = selectedService?.name || visitServiceForm.service_name_snapshot.trim();
-    if (!name) {
-      toast("نام خدمت را انتخاب یا وارد کنید.", "error");
-      return;
-    }
-    try {
-      const item = await invoke<VisitService>("save_visit_service", {
-        item: {
-          visit_id: selectedVisitId,
-          service_id: selectedService?.id ?? null,
-          service_name_snapshot: name,
-          price: visitServiceForm.price,
-          quantity: visitServiceForm.quantity,
-          total: visitServiceForm.price * visitServiceForm.quantity,
-          notes: visitServiceForm.notes,
-        },
-      });
-      setVisitServices((items) => [...items, item]);
-      setVisits((items) => items.map((visit) => visit.id === selectedVisitId ? { ...visit, total_fee: visit.total_fee + item.total } : visit));
-      setVisitServiceForm({ service_id: "", service_name_snapshot: "", price: 0, quantity: 1, notes: "" });
-      toast("خدمت به ویزیت اضافه شد.");
-    } catch {
-      toast("ثبت خدمت انجام نشد.", "error");
-    }
-  };
+  useEffect(() => {
+    setSelected(initialClient);
+    setInput(initialClient ?? emptyClient);
+  }, [initialClient]);
 
-  const selectService = (value: string) => {
-    const item = serviceCatalog.find((service) => String(service.id) === value);
-    setVisitServiceForm((current) => ({
-      ...current,
-      service_id: value,
-      service_name_snapshot: item?.name ?? "",
-      price: item?.default_price ?? current.price,
-    }));
+  useEffect(() => {
+    if (!query.trim() || !isDesktopRuntime()) {
+      setResults([]);
+      return;
+    }
+    const timer = window.setTimeout(() => invoke<Client[]>("search_clients", { query }).then(setResults).catch(() => setResults([])), 150);
+    return () => window.clearTimeout(timer);
+  }, [query]);
+
+  const calc = calculateNutrition(input);
+  const calories = Number(overrides.calories) || calc.targetCalories;
+  const protein = Number(overrides.protein) || (calories * 0.25) / 4;
+  const carbs = Number(overrides.carbs) || (calories * 0.45) / 4;
+  const fat = Number(overrides.fat) || (calories * 0.3) / 9;
+  const setField = <K extends keyof Client>(key: K, value: Client[K]) => setInput((current) => ({ ...current, [key]: value }));
+  const choose = (client: Client) => {
+    setSelected(client);
+    setInput(client);
+    setQuery("");
+    setResults([]);
+    toast("اطلاعات مراجع در ماشین حساب قرار گرفت.");
+  };
+  const clear = () => {
+    setSelected(null);
+    setInput(emptyClient);
+    setQuery("");
+    setOverrides({ calories: "", protein: "", carbs: "", fat: "" });
   };
 
   return (
     <>
-      <PageHeader title={client ? "پرونده مراجع" : "ثبت مراجع جدید"} subtitle="اطلاعات پایه، رکوردها، بادی‌آنالیز، پیوست‌ها، و خدمات هر ویزیت را مدیریت کنید." action={<SecondaryButton icon={RotateCcw} onClick={onBack}>بازگشت</SecondaryButton>} />
-      <section className="grid gap-5 xl:grid-cols-[0.75fr_1.25fr]">
-        <div className="card p-5">
-          <div className="flex items-center gap-4">
-            <ProfileAvatar client={form} size="lg" />
-            <div>
-              <p className="font-bold">{form.full_name || "مراجع جدید"}</p>
-              <button className="mt-2 text-xs font-semibold text-olive" onClick={chooseProfileImage}>انتخاب عکس پروفایل</button>
+      <PageHeader title="ماشین حساب تغذیه" subtitle="انتخاب مراجع ذخیره‌شده یا ورود دستی؛ همه نتایج در لحظه به‌روزرسانی می‌شوند." />
+      <div className="grid gap-5 xl:grid-cols-[430px_1fr]">
+        <section className="card p-6">
+          <div className="mb-5 flex items-center justify-between gap-3">
+            <div><h2 className="text-xl font-bold">ورودی‌ها</h2><p className="helper mt-1">{selected ? `مراجع انتخاب‌شده: ${selected.full_name}` : "حالت ورود دستی فعال است."}</p></div>
+            {selected && <SecondaryButton icon={RotateCcw} onClick={clear}>ورود دستی</SecondaryButton>}
+          </div>
+          <div className="relative mb-5">
+            <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={20} />
+            <input className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی مراجع ذخیره‌شده" />
+            {results.length > 0 && (
+              <div className="absolute z-10 mt-2 max-h-72 w-full overflow-auto rounded-card border border-warm-100 bg-paper p-2 shadow-soft">
+                {results.map((client) => <button key={client.id} onClick={() => choose(client)} className="soft-transition flex w-full items-center justify-between rounded-control px-3 py-3 text-right hover:bg-warm-50"><span className="font-semibold">{client.full_name}</span><span className="text-xs text-warm-500">{goalLabels[client.goal]}</span></button>)}
+              </div>
+            )}
+          </div>
+          <div className="grid gap-4">
+            <SelectField label="جنسیت" value={input.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
+            <NumberField label="سن" value={input.age} onChange={(value) => setField("age", value)} suffix="سال" />
+            <NumberField label="قد" value={input.height_cm} onChange={(value) => setField("height_cm", value)} suffix="سانتی‌متر" />
+            <NumberField label="وزن" value={input.weight_kg} onChange={(value) => setField("weight_kg", value)} suffix="کیلوگرم" />
+            <SelectField label="سطح فعالیت" value={input.activity_level} onChange={(value) => setField("activity_level", value as ActivityLevel)} options={activityLabels} />
+            <SelectField label="هدف" value={input.goal} onChange={(value) => setField("goal", value as Goal)} options={goalLabels} />
+          </div>
+          <div className="mt-6 rounded-card bg-warm-50 p-4">
+            <p className="text-sm font-bold">اصلاح دستی</p>
+            <p className="helper mt-1">کالری یا گرم هر ماکرو را آزادانه تغییر دهید.</p>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <OverrideField label="کالری هدف" value={overrides.calories} onChange={(value) => setOverrides({ ...overrides, calories: value })} />
+              <OverrideField label="پروتئین" value={overrides.protein} onChange={(value) => setOverrides({ ...overrides, protein: value })} />
+              <OverrideField label="کربوهیدرات" value={overrides.carbs} onChange={(value) => setOverrides({ ...overrides, carbs: value })} />
+              <OverrideField label="چربی" value={overrides.fat} onChange={(value) => setOverrides({ ...overrides, fat: value })} />
             </div>
           </div>
-          <div className="mt-6 grid gap-4">
-            <TextField label="نام کامل" value={form.full_name} onChange={(value) => setField("full_name", value)} />
-            <TextField label="موبایل" value={form.phone} onChange={(value) => setField("phone", value)} />
-            <TextField label="ایمیل" value={form.email} onChange={(value) => setField("email", value)} />
-            <SelectField label="جنسیت" value={form.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
-            <NumberField label="سن" value={form.age} onChange={(value) => setField("age", value)} />
-            <NumberField label="قد فعلی" value={form.height_cm} onChange={(value) => setField("height_cm", value)} suffix="cm" />
-            <NumberField label="وزن فعلی" value={form.weight_kg} onChange={(value) => setField("weight_kg", value)} suffix="kg" />
-            <SelectField label="سطح فعالیت" value={form.activity_level} onChange={(value) => setField("activity_level", value as ActivityLevel)} options={activityLabels} />
-            <SelectField label="هدف" value={form.goal} onChange={(value) => setField("goal", value as Goal)} options={goalLabels} />
-            <DateField label="تاریخ مراجعه بعدی" value={form.next_visit_date ?? ""} onChange={(value) => setField("next_visit_date", value)} />
-            <SelectField label="وضعیت وقت" value={form.next_visit_status ?? "tentative"} onChange={(value) => setField("next_visit_status", value as VisitStatus)} options={{ tentative: "موقت", confirmed: "قطعی" }} />
-            <TextArea label="یادداشت" value={form.notes} onChange={(value) => setField("notes", value)} />
-            <PrimaryButton icon={Save} onClick={save}>ذخیره پرونده</PrimaryButton>
+        </section>
+        <section className="grid content-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <ResultCard title="BMI" value={formatNumber(calc.bmi, 1)} unit={bmiCategory(calc.bmi)} text="نمای سریع وضعیت وزنی بر اساس قد و وزن." />
+          <ResultCard title="BMR" value={formatNumber(calc.bmr)} unit="کیلوکالری" text="انرژی پایه بدن با فرمول Mifflin-St Jeor." />
+          <ResultCard title="TDEE" value={formatNumber(calc.tdee)} unit="کیلوکالری" text="نیاز روزانه با سطح فعالیت." />
+          <ResultCard title="کالری هدف" value={formatNumber(calories)} unit="کیلوکالری" text="بر اساس هدف وزن و قابل اصلاح دستی." featured />
+          <ResultCard title="پروتئین" value={formatNumber(protein)} unit="گرم" text="پیش‌فرض ۲۵٪ از کالری هدف." />
+          <ResultCard title="کربوهیدرات" value={formatNumber(carbs)} unit="گرم" text="پیش‌فرض ۴۵٪ از کالری هدف." />
+          <ResultCard title="چربی" value={formatNumber(fat)} unit="گرم" text="پیش‌فرض ۳۰٪ از کالری هدف." />
+        </section>
+      </div>
+    </>
+  );
+}
+
+function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; setSettings: (settings: Settings) => void; toast: ToastFn }) {
+  const [form, setForm] = useState(settings);
+  const [credentials, setCredentials] = useState({ current_password: "", username: settings.username || "admin", password: "", repeat: "" });
+  useEffect(() => setForm(settings), [settings]);
+
+  const save = async () => {
+    try {
+      const saved = isDesktopRuntime() ? await invoke<Settings>("save_settings", { settings: form }) : form;
+      setSettings(saved);
+      toast("تنظیمات ذخیره شد.");
+    } catch {
+      toast("ذخیره تنظیمات انجام نشد.", "error");
+    }
+  };
+  const changeCredentials = async () => {
+    if (!credentials.username.trim() || credentials.password.length < 4 || credentials.password !== credentials.repeat) {
+      toast("نام کاربری و رمز جدید را درست وارد کنید.", "error");
+      return;
+    }
+    try {
+      if (isDesktopRuntime()) await invoke("change_credentials", { input: { current_password: credentials.current_password, username: credentials.username, password: credentials.password } });
+      setSettings({ ...settings, username: credentials.username });
+      setCredentials({ current_password: "", username: credentials.username, password: "", repeat: "" });
+      toast("اطلاعات ورود تغییر کرد.");
+    } catch {
+      toast("رمز فعلی درست نیست یا تغییر انجام نشد.", "error");
+    }
+  };
+  const exportData = async () => {
+    try {
+      const path = await invoke<string>("export_data_backup");
+      toast(`فایل سبک ذخیره شد: ${path}`);
+    } catch {
+      toast("ساخت فایل پشتیبان انجام نشد.", "error");
+    }
+  };
+  const restoreData = async () => {
+    try {
+      const selected = await open({ multiple: false, filters: [{ name: "Dietoy backup", extensions: ["json"] }] });
+      if (!selected || Array.isArray(selected)) return;
+      await invoke("restore_data_backup", { path: selected });
+      const restored = await invoke<Settings>("get_settings");
+      setSettings(restored);
+      toast("اطلاعات قبلی بازیابی شد.");
+    } catch {
+      toast("بازیابی انجام نشد.", "error");
+    }
+  };
+  const exportSqlite = async () => {
+    try {
+      const path = await invoke<string>("export_database");
+      toast(`کپی SQLite ذخیره شد: ${path}`);
+    } catch {
+      toast("خروجی SQLite انجام نشد.", "error");
+    }
+  };
+  const chooseBrandImage = async (kind: "logo" | "background") => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "svg"] }],
+      });
+      if (!selected || Array.isArray(selected)) return;
+      const imported = isDesktopRuntime()
+        ? await invoke<string>("import_brand_asset", { path: selected, kind })
+        : selected;
+      setForm((current) =>
+        kind === "logo"
+          ? { ...current, logo_path: imported }
+          : { ...current, background_image_path: imported },
+      );
+      toast(kind === "logo" ? "لوگو انتخاب شد. ذخیره را بزنید." : "عکس پس‌زمینه انتخاب شد. ذخیره را بزنید.");
+    } catch {
+      toast("انتخاب تصویر انجام نشد.", "error");
+    }
+  };
+  const applyDietoyTheme = () => {
+    setForm((current) => ({
+      ...current,
+      primary_color: dietoyTheme.primary_color,
+      background_color: dietoyTheme.background_color,
+      text_color: dietoyTheme.text_color,
+    }));
+    toast("تم دایتوری اعمال شد. برای ماندن دائمی ذخیره را بزنید.");
+  };
+
+  return (
+    <>
+      <PageHeader title="تنظیمات" subtitle="شخصی‌سازی مطب، تغییر ورود و پشتیبان‌گیری برای آپدیت‌های آینده." action={<PrimaryButton icon={Save} onClick={save}>ذخیره</PrimaryButton>} />
+      <section className="grid gap-5 xl:grid-cols-[1fr_0.75fr]">
+        <div className="card p-6">
+          <div className="grid gap-5 md:grid-cols-2">
+            <div className="md:col-span-2 rounded-control border border-warm-100 bg-warm-50 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-bold">{dietoyTheme.name}</p>
+                  <p className="helper mt-1">پس‌زمینه برند با HEX #10517A و نوشته روشن برای صفحه‌های اصلی.</p>
+                </div>
+                <SecondaryButton icon={Palette} onClick={applyDietoyTheme}>اعمال تم</SecondaryButton>
+              </div>
+            </div>
+            <TextField label="نام متخصص تغذیه" value={form.dietitian_name} onChange={(value) => setForm({ ...form, dietitian_name: value })} />
+            <TextField label="نام کلینیک" value={form.clinic_name} onChange={(value) => setForm({ ...form, clinic_name: value })} />
+            <div>
+              <label className="label">رنگ اصلی</label>
+              <div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-3">
+                <Palette size={19} className="text-warm-500" />
+                <input type="color" value={colorValue(form.primary_color, defaultSettings.primary_color)} onChange={(event) => setForm({ ...form, primary_color: event.target.value })} className="h-8 w-12 cursor-pointer border-0 bg-transparent p-0" />
+                <input value={form.primary_color} onChange={(event) => setForm({ ...form, primary_color: event.target.value })} className="numbers min-w-0 flex-1 border-0 bg-transparent text-sm outline-none" />
+              </div>
+            </div>
+            <div>
+              <label className="label">رنگ پس‌زمینه</label>
+              <div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-3">
+                <Palette size={19} className="text-warm-500" />
+                <input type="color" value={colorValue(form.background_color, defaultSettings.background_color)} onChange={(event) => setForm({ ...form, background_color: event.target.value })} className="h-8 w-12 cursor-pointer border-0 bg-transparent p-0" />
+                <input value={form.background_color || defaultSettings.background_color} onChange={(event) => setForm({ ...form, background_color: event.target.value })} className="numbers min-w-0 flex-1 border-0 bg-transparent text-sm outline-none" />
+              </div>
+            </div>
+            <div>
+              <label className="label">رنگ نوشته‌ها</label>
+              <div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-3">
+                <Palette size={19} className="text-warm-500" />
+                <input type="color" value={colorValue(form.text_color, defaultSettings.text_color)} onChange={(event) => setForm({ ...form, text_color: event.target.value })} className="h-8 w-12 cursor-pointer border-0 bg-transparent p-0" />
+                <input value={form.text_color || defaultSettings.text_color} onChange={(event) => setForm({ ...form, text_color: event.target.value })} className="numbers min-w-0 flex-1 border-0 bg-transparent text-sm outline-none" />
+              </div>
+            </div>
+            <div className="md:col-span-2">
+              <label className="label">لوگو و عکس پس‌زمینه</label>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                <button type="button" onClick={() => chooseBrandImage("logo")} className="soft-transition flex h-16 items-center justify-between rounded-control border border-warm-200 bg-white px-4 text-sm font-semibold hover:bg-warm-50">
+                  <span className="flex items-center gap-2"><ImageIcon size={19} /> انتخاب لوگو</span>
+                  {form.logo_path && <span className="text-xs text-olive">انتخاب شده</span>}
+                </button>
+                <button type="button" onClick={() => chooseBrandImage("background")} className="soft-transition flex h-16 items-center justify-between rounded-control border border-warm-200 bg-white px-4 text-sm font-semibold hover:bg-warm-50">
+                  <span className="flex items-center gap-2"><ImageIcon size={19} /> انتخاب بک‌گراند</span>
+                  {form.background_image_path && <span className="text-xs text-olive">انتخاب شده</span>}
+                </button>
+              </div>
+              <p className="helper mt-3">برای لوگوی پیش‌فرض نسخه نصبی، فایل لوگو را با نام logo.png داخل پوشه public پروژه بگذارید.</p>
+            </div>
           </div>
         </div>
-
         <div className="grid gap-5">
-          <div className="card p-5">
-            <h2 className="text-xl font-bold">رکوردهای پایش</h2>
-            <div className="mt-4 grid gap-3 md:grid-cols-4">
-              <DateField label="تاریخ" value={recordForm.record_date} onChange={(value) => setRecordForm((current) => ({ ...current, record_date: value }))} compact />
-              <NumberField label="وزن" value={recordForm.weight_kg} onChange={(value) => setRecordForm((current) => ({ ...current, weight_kg: value }))} suffix="kg" />
-              <NumberField label="قد" value={recordForm.height_cm} onChange={(value) => setRecordForm((current) => ({ ...current, height_cm: value }))} suffix="cm" />
-              <div className="flex items-end"><SecondaryButton icon={Plus} onClick={saveRecord}>ثبت رکورد</SecondaryButton></div>
+          <div className="card p-6">
+            <KeyRound className="text-sage" size={28} />
+            <h2 className="mt-5 text-xl font-bold">ورود به برنامه</h2>
+            <p className="mt-3 text-sm leading-7 text-warm-500">نام کاربری و رمز اولیه admin است. قبل از تحویل به مشتری تغییر دهید.</p>
+            <div className="mt-5 grid gap-4">
+              <TextField label="نام کاربری جدید" value={credentials.username} onChange={(value) => setCredentials({ ...credentials, username: value })} />
+              <PasswordField label="رمز فعلی" value={credentials.current_password} onChange={(value) => setCredentials({ ...credentials, current_password: value })} />
+              <PasswordField label="رمز جدید" value={credentials.password} onChange={(value) => setCredentials({ ...credentials, password: value })} />
+              <PasswordField label="تکرار رمز جدید" value={credentials.repeat} onChange={(value) => setCredentials({ ...credentials, repeat: value })} />
             </div>
-            <TextArea label="یادداشت رکورد" value={recordForm.notes} onChange={(value) => setRecordForm((current) => ({ ...current, notes: value }))} />
-            <div className="mt-5 grid gap-3">
-              {records.length === 0 ? <EmptyState icon={TrendingUp} title="رکوردی وجود ندارد" text="بعد از ذخیره پرونده، وزن و قد هر جلسه را ثبت کنید." /> : records.map((record) => (
-                <div key={record.id} className="rounded-control border border-warm-100 bg-warm-50 p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="font-bold">{formatPersianDate(record.record_date)}</p>
-                    <p className="numbers text-sm text-warm-500">{formatNumber(record.weight_kg, 1)} kg · {formatNumber(record.height_cm, 0)} cm</p>
-                  </div>
-                  {record.notes && <p className="mt-2 text-sm leading-7 text-warm-500">{record.notes}</p>}
-                </div>
-              ))}
-            </div>
+            <div className="mt-6"><SecondaryButton icon={KeyRound} onClick={changeCredentials}>تغییر اطلاعات ورود</SecondaryButton></div>
           </div>
-
-          <div className="card p-5">
-            <h2 className="text-xl font-bold">بادی‌آنالیز و پیوست‌ها</h2>
-            <p className="helper mt-1">برای هر مراجع چند فایل با تاریخ مستقل ثبت می‌شود. بادی‌آنالیزها جدا نمایش داده می‌شوند.</p>
-            <div className="mt-4 grid gap-3 md:grid-cols-4">
-              <SelectField label="نوع فایل" value={attachmentForm.category} onChange={(value) => setAttachmentForm((current) => ({ ...current, category: value as AttachmentCategory }))} options={attachmentCategoryLabels} />
-              <DateField label="تاریخ فایل" value={attachmentForm.attachment_date} onChange={(value) => setAttachmentForm((current) => ({ ...current, attachment_date: value }))} />
-              <TextField label="عنوان" value={attachmentForm.title} onChange={(value) => setAttachmentForm((current) => ({ ...current, title: value }))} />
-              <div className="flex items-end"><SecondaryButton icon={FileUp} onClick={importAttachment}>افزودن فایل</SecondaryButton></div>
-            </div>
-            <TextArea label="یادداشت فایل" value={attachmentForm.notes} onChange={(value) => setAttachmentForm((current) => ({ ...current, notes: value }))} />
-            <div className="mt-5 grid gap-5 xl:grid-cols-2">
-              <AttachmentList title="بادی‌آنالیزها" items={bodyAnalysisFiles} empty="بادی‌آنالیزی ثبت نشده است." onView={setSelectedAttachment} prominent />
-              <AttachmentList title="سایر پیوست‌ها" items={otherAttachments} empty="پیوست دیگری ثبت نشده است." onView={setSelectedAttachment} />
-            </div>
-            {selectedAttachment && <FilePreview attachment={selectedAttachment} />}
-          </div>
-
-          <div className="card p-5">
-            <h2 className="text-xl font-bold">ویزیت‌ها و خدمات</h2>
-            <p className="helper mt-1">خدمات هر جلسه از لیست تنظیمات انتخاب می‌شود و جمع هزینه جلسه خودکار محاسبه می‌شود.</p>
-            <div className="mt-4 grid gap-3 md:grid-cols-5">
-              <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => setVisitForm((current) => ({ ...current, visit_date: value }))} />
-              <TimeField label="ساعت ویزیت" value={visitForm.visit_time} onChange={(value) => setVisitForm((current) => ({ ...current, visit_time: value }))} />
-              <SelectField label="وضعیت" value={visitForm.status} onChange={(value) => setVisitForm((current) => ({ ...current, status: value as VisitStatus }))} options={visitStatusOptions} />
-              <TextField label="یادداشت ویزیت" value={visitForm.notes} onChange={(value) => setVisitForm((current) => ({ ...current, notes: value }))} />
-              <div className="flex items-end"><SecondaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</SecondaryButton></div>
-            </div>
-            <div className="mt-5 grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
-              <div className="grid gap-3">
-                {visits.length === 0 ? <EmptyState icon={CalendarDays} title="ویزیتی ثبت نشده" text="برای ثبت خدمات، ابتدا یک ویزیت بسازید." /> : visits.map((visit) => (
-                  <button key={visit.id} onClick={() => visit.id && setSelectedVisitId(visit.id)} className={cn("rounded-control border p-4 text-right soft-transition", selectedVisitId === visit.id ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-warm-100 bg-warm-50 hover:bg-paper")}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-bold">{formatPersianDate(dateOnly(visit.visit_date))}</span>
-                      <span className="numbers text-xs">{formatNumber(visit.total_fee, 0)} تومان</span>
-                    </div>
-                    <p className="numbers mt-2 text-xs opacity-80">{timeOnly(visit.visit_date) ? `ساعت ${timeOnly(visit.visit_date)}` : "بدون ساعت"} · {visitStatusOptions[visit.status]}</p>
-                    {visit.notes && <p className="mt-2 text-xs opacity-80">{visit.notes}</p>}
-                  </button>
-                ))}
-              </div>
-              <div className="rounded-card border border-warm-100 bg-warm-50 p-4">
-                <h3 className="font-bold">خدمات ویزیت انتخاب‌شده</h3>
-                {selectedVisit && <p className="numbers mt-1 text-xs text-warm-500">جمع فعلی: {formatNumber(selectedVisit.total_fee, 0)} تومان</p>}
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <SelectField label="انتخاب خدمت" value={visitServiceForm.service_id} onChange={selectService} options={{ "": "انتخاب دستی/آزاد", ...Object.fromEntries(serviceCatalog.map((service) => [String(service.id), `${service.name} · ${formatNumber(service.default_price, 0)}`])) }} />
-                  <TextField label="نام خدمت آزاد" value={visitServiceForm.service_name_snapshot} onChange={(value) => setVisitServiceForm((current) => ({ ...current, service_name_snapshot: value }))} />
-                  <MoneyField label="هزینه" value={visitServiceForm.price} onChange={(value) => setVisitServiceForm((current) => ({ ...current, price: value }))} />
-                  <NumberField label="تعداد" value={visitServiceForm.quantity} onChange={(value) => setVisitServiceForm((current) => ({ ...current, quantity: value }))} />
-                </div>
-                <TextArea label="یادداشت خدمت" value={visitServiceForm.notes} onChange={(value) => setVisitServiceForm((current) => ({ ...current, notes: value }))} />
-                <div className="mt-3"><SecondaryButton icon={Plus} onClick={addVisitService}>افزودن خدمت به ویزیت</SecondaryButton></div>
-                <div className="mt-4 grid gap-2">
-                  {visitServices.length === 0 ? <p className="text-sm text-warm-500">برای این ویزیت خدمتی ثبت نشده است.</p> : visitServices.map((item) => (
-                    <div key={item.id} className="rounded-control bg-paper p-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-semibold">{item.service_name_snapshot}</span>
-                        <span className="numbers text-sm text-olive">{formatNumber(item.total, 0)} تومان</span>
-                      </div>
-                      <p className="numbers mt-1 text-xs text-warm-500">{formatNumber(item.price, 0)} × {formatNumber(item.quantity, 1)}</p>
-                      {item.notes && <p className="mt-1 text-xs text-warm-500">{item.notes}</p>}
-                    </div>
-                  ))}
-                </div>
-              </div>
+          <div className="card p-6">
+            <Database className="text-sage" size={28} />
+            <h2 className="mt-5 text-xl font-bold">پشتیبان و آپدیت</h2>
+            <p className="mt-3 text-sm leading-7 text-warm-500">برای آپدیت فقط فایل JSON سبک را از مشتری بگیرید و بعد از نصب نسخه جدید بازیابی کنید.</p>
+            <div className="mt-6 grid gap-3">
+              <SecondaryButton icon={Download} onClick={exportData}>خروجی سبک برای آپدیت</SecondaryButton>
+              <SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی اطلاعات قبلی</SecondaryButton>
+              <SecondaryButton icon={Database} onClick={exportSqlite}>خروجی کامل SQLite</SecondaryButton>
             </div>
           </div>
         </div>
@@ -983,21 +1174,228 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
   );
 }
 
-function AttachmentList({ title, items, empty, onView, prominent = false }: { title: string; items: Attachment[]; empty: string; onView: (attachment: Attachment) => void; prominent?: boolean }) {
+function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: React.ReactNode }) {
+  return <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between"><div><h1 className="text-3xl font-bold tracking-normal md:text-4xl">{title}</h1><p className="mt-3 max-w-2xl text-sm leading-7 text-warm-500">{subtitle}</p></div>{action}</header>;
+}
+
+function FieldError({ text }: { text?: string }) {
+  if (!text) return null;
+  return <p className="mt-2 text-xs font-medium leading-6 text-red-600">{text}</p>;
+}
+
+function ErrorSummary({ message }: { message: string }) {
+  return (
+    <div className="mb-5 rounded-control border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium leading-7 text-red-700">
+      {message}
+    </div>
+  );
+}
+
+function TabButton({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "soft-transition h-11 rounded-control px-4 text-sm font-semibold",
+        active ? "bg-[var(--primary)] text-white shadow-lift" : "bg-warm-50 text-warm-500 hover:bg-white hover:text-charcoal",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PrimaryButton({ children, onClick, icon: Icon, type = "button" }: { children: React.ReactNode; onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void; icon?: typeof Plus; type?: "button" | "submit" }) {
+  return <button type={type} onClick={onClick} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control bg-[var(--primary)] px-5 text-sm font-semibold text-white shadow-lift hover:-translate-y-0.5">{Icon && <Icon size={19} />}{children}</button>;
+}
+
+function SecondaryButton({ children, onClick, icon: Icon }: { children: React.ReactNode; onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void; icon?: typeof Plus }) {
+  return <button onClick={onClick} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control border border-warm-100 bg-paper px-5 text-sm font-semibold text-charcoal hover:bg-warm-50">{Icon && <Icon size={19} />}{children}</button>;
+}
+
+function Stat({ label, value, icon: Icon }: { label: string; value?: number; icon: typeof Users }) {
+  return <div className="card p-5"><div className="mb-7 flex items-center justify-between text-warm-500"><span className="text-sm">{label}</span><Icon size={21} /></div>{value === undefined ? <div className="h-10 w-20 animate-pulse rounded-control bg-warm-100" /> : <p className="numbers text-4xl font-bold text-charcoal">{formatNumber(value)}</p>}</div>;
+}
+
+function ProfileAvatar({ client, size = "md" }: { client: Client; size?: "md" | "lg" }) {
+  const [failed, setFailed] = useState(false);
+  const photo = client.profile_image_path ? assetUrl(client.profile_image_path) : "";
+  const initials = client.full_name.trim().slice(0, 2) || "DT";
+  const sizeClass = size === "lg" ? "h-24 w-24 text-xl" : "h-14 w-14 text-sm";
+  useEffect(() => setFailed(false), [photo]);
+
+  return (
+    <div className={cn("shrink-0 overflow-hidden rounded-card bg-[var(--primary)] text-white shadow-lift", sizeClass)}>
+      {photo && !failed ? (
+        <img src={photo} alt={client.full_name || "profile"} className="h-full w-full object-cover" onError={() => setFailed(true)} />
+      ) : (
+        <div className="grid h-full w-full place-items-center font-bold">{initials}</div>
+      )}
+    </div>
+  );
+}
+
+function ClientRow({ client, onEdit, onCalculate, onArchive }: { client: Client; onEdit: () => void; onCalculate?: () => void; onArchive?: () => void }) {
+  return (
+    <div
+      className={cn("soft-transition cursor-pointer rounded-card border border-warm-100 bg-white p-4 hover:border-[var(--primary)] hover:shadow-lift", client.archived && "opacity-60")}
+      role="button"
+      tabIndex={0}
+      onClick={onEdit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") onEdit();
+      }}
+    >
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex min-w-0 items-center gap-4">
+          <ProfileAvatar client={client} />
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold">{client.full_name}</h3>
+            <p className="mt-2 text-xs text-warm-500">{genderLabels[client.gender]}، {formatNumber(client.age)} سال، {formatNumber(client.height_cm)} سانتی‌متر، {formatNumber(client.weight_kg)} کیلوگرم، {goalLabels[client.goal]}</p>
+            <div className="mt-2 flex flex-wrap gap-3 text-xs text-warm-500">
+              {client.phone && <span className="flex items-center gap-1"><Phone size={14} />{client.phone}</span>}
+              {client.email && <span className="flex items-center gap-1"><Mail size={14} />{client.email}</span>}
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {onCalculate && <SecondaryButton icon={Calculator} onClick={(event) => { event.stopPropagation(); onCalculate(); }}>محاسبه</SecondaryButton>}
+          <SecondaryButton icon={Pencil} onClick={(event) => { event.stopPropagation(); onEdit(); }}>ویرایش</SecondaryButton>
+          {onArchive && <SecondaryButton icon={Archive} onClick={(event) => { event.stopPropagation(); onArchive(); }}>{client.archived ? "فعال" : "بایگانی"}</SecondaryButton>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResultCard({ title, value, unit, text, featured = false }: { title: string; value: string; unit: string; text: string; featured?: boolean }) {
+  return <div className={cn("card p-5", featured && "border-[var(--primary)] bg-[#fffef9]")}><p className="text-sm font-semibold text-warm-500">{title}</p><div className="mt-5 flex items-end gap-2"><p className="numbers text-4xl font-bold text-charcoal">{value}</p><p className="pb-1 text-sm text-olive">{unit}</p></div><p className="mt-4 text-xs leading-6 text-warm-500">{text}</p></div>;
+}
+
+function TextField({ label, value, onChange, placeholder, error }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; error?: string }) {
+  return <div><label className="label">{label}</label><input className={cn("control mt-2 w-full", error && "border-red-300 focus:border-red-400 focus:ring-red-100")} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} /><FieldError text={error} /></div>;
+}
+
+function PasswordField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return <div><label className="label">{label}</label><input className="control mt-2 w-full" type="password" value={value} onChange={(event) => onChange(event.target.value)} autoComplete="new-password" /></div>;
+}
+
+function IconInput({ icon: Icon, label, value, onChange, type = "text", autoComplete }: { icon: typeof UserRound; label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string }) {
+  return <div><label className="label">{label}</label><div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-4 focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10"><Icon size={19} className="text-warm-500" /><input className="min-w-0 flex-1 border-0 bg-transparent outline-none" type={type} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} /></div></div>;
+}
+
+function NumberField({ label, value, onChange, suffix, error }: { label: string; value: number; onChange: (value: number) => void; suffix: string; error?: string }) {
+  return <div><label className="label">{label}</label><div className={cn("mt-2 flex h-12 items-center rounded-control border border-warm-200 bg-white px-4 focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10", error && "border-red-300 focus-within:border-red-400 focus-within:ring-red-100")}><input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left outline-none" type="number" min="0" value={value} onChange={(event) => onChange(Number(event.target.value))} /><span className="text-xs text-warm-500">{suffix}</span></div><FieldError text={error} /></div>;
+}
+
+function DateField({ label, value, onChange, error }: { label: string; value: string; onChange: (value: string) => void; error?: string }) {
+  const currentParts = jalaliPartsFromIso(value || todayIsoDate());
+  const [text, setText] = useState(isoToJalaliInput(value || todayIsoDate()));
+  const [openPicker, setOpenPicker] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState({ year: currentParts.jy, month: currentParts.jm });
+
+  useEffect(() => {
+    setText(isoToJalaliInput(value || todayIsoDate()));
+    const next = jalaliPartsFromIso(value || todayIsoDate());
+    setVisibleMonth({ year: next.jy, month: next.jm });
+  }, [value]);
+
+  const commitText = (nextText: string) => {
+    setText(nextText);
+    const iso = jalaliInputToIso(nextText);
+    if (iso) onChange(iso);
+  };
+  const chooseDay = (day: number) => {
+    const iso = jalaliInputToIso(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}/${String(day).padStart(2, "0")}`);
+    if (!iso) return;
+    onChange(iso);
+    setText(isoToJalaliInput(iso));
+    setOpenPicker(false);
+  };
+  const moveMonth = (amount: number) => {
+    setVisibleMonth((current) => {
+      const nextMonth = current.month + amount;
+      if (nextMonth < 1) return { year: current.year - 1, month: 12 };
+      if (nextMonth > 12) return { year: current.year + 1, month: 1 };
+      return { year: current.year, month: nextMonth };
+    });
+  };
+  const selected = jalaliPartsFromIso(value || todayIsoDate());
+  const days = Array.from({ length: daysInJalaliMonth(visibleMonth.year, visibleMonth.month) }, (_, index) => index + 1);
+
+  return (
+    <div className="relative">
+      <label className="label">{label}</label>
+      <input
+        className={cn("control numbers mt-2 w-full text-left", error && "border-red-300 focus:border-red-400 focus:ring-red-100")}
+        value={text}
+        onFocus={() => setOpenPicker(true)}
+        onChange={(event) => commitText(event.target.value)}
+        placeholder="1405/04/17"
+      />
+      <FieldError text={error} />
+      {openPicker && (
+        <div className="absolute z-20 mt-2 w-72 rounded-card border border-warm-100 bg-paper p-3 shadow-soft">
+          <div className="mb-3 flex items-center justify-between">
+            <button type="button" className="h-9 w-9 rounded-control bg-warm-50" onClick={() => moveMonth(1)}>‹</button>
+            <span className="numbers text-sm font-bold">{toPersianDigits(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}`)}</span>
+            <button type="button" className="h-9 w-9 rounded-control bg-warm-50" onClick={() => moveMonth(-1)}>›</button>
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {days.map((day) => {
+              const active = selected.jy === visibleMonth.year && selected.jm === visibleMonth.month && selected.jd === day;
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => chooseDay(day)}
+                  className={cn("numbers h-9 rounded-control text-sm hover:bg-warm-50", active && "bg-[var(--primary)] text-white hover:bg-[var(--primary)]")}
+                >
+                  {toPersianDigits(day)}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WeightHistory({ records }: { records: ClientRecord[] }) {
+  const weights = records.map((record) => record.weight_kg);
+  const min = Math.min(...weights);
+  const max = Math.max(...weights);
+  const range = Math.max(max - min, 1);
+  const points = records.map((record, index) => {
+    const x = records.length === 1 ? 250 : 24 + (index * 452) / (records.length - 1);
+    const y = 156 - ((record.weight_kg - min) * 116) / range;
+    return { x, y, record };
+  });
+  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+
   return (
     <div>
-      <h3 className="font-bold">{title}</h3>
-      <div className="mt-3 grid gap-2">
-        {items.length === 0 ? <p className="rounded-control bg-warm-50 p-4 text-sm text-warm-500">{empty}</p> : items.map((item) => (
-          <div key={item.id} className={cn("rounded-control border p-4", prominent ? "border-emerald/20 bg-emerald/5" : "border-warm-100 bg-warm-50")}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-semibold">{item.title || item.file_name}</p>
-                <p className="mt-1 text-xs text-warm-500">{attachmentCategoryLabels[item.category]} · {formatPersianDate(item.attachment_date)}</p>
-              </div>
-              <button className="rounded-full bg-paper p-2 text-olive shadow-sm" onClick={() => onView(item)} aria-label="مشاهده فایل"><Eye size={17} /></button>
+      <svg viewBox="0 0 500 190" className="h-48 w-full overflow-visible" role="img" aria-label="نمودار تغییر وزن">
+        <line x1="24" y1="156" x2="476" y2="156" stroke="#d8cbb9" strokeWidth="1" />
+        <line x1="24" y1="40" x2="24" y2="156" stroke="#d8cbb9" strokeWidth="1" />
+        <path d={path} fill="none" stroke="var(--primary)" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((point) => (
+          <g key={`${point.record.record_date}-${point.record.id ?? point.x}`}>
+            <circle cx={point.x} cy={point.y} r="6" fill="var(--primary)" />
+            <text x={point.x} y={point.y - 12} textAnchor="middle" className="numbers fill-warm-500 text-[11px]">{formatNumber(point.record.weight_kg, 1)}</text>
+          </g>
+        ))}
+      </svg>
+      <div className="mt-4 grid gap-2">
+        {[...records].reverse().map((record) => (
+          <div key={record.id ?? `${record.record_date}-${record.weight_kg}`} className="rounded-control border border-warm-100 bg-warm-50 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-sm font-semibold">{formatPersianDate(record.record_date)}</span>
+              <span className="numbers text-sm text-olive">{formatNumber(record.weight_kg, 1)} kg</span>
             </div>
-            {item.notes && <p className="mt-2 text-xs leading-6 text-warm-500">{item.notes}</p>}
+            {record.notes && <p className="mt-2 text-xs leading-6 text-warm-500">{record.notes}</p>}
           </div>
         ))}
       </div>
@@ -1005,534 +1403,22 @@ function AttachmentList({ title, items, empty, onView, prominent = false }: { ti
   );
 }
 
-function FilePreview({ attachment }: { attachment: Attachment }) {
-  const src = assetUrl(attachment.local_path);
-  const ext = fileExtension(attachment.local_path || attachment.file_name);
-  const isImage = ["png", "jpg", "jpeg", "webp", "gif", "bmp"].includes(ext);
-  return (
-    <div className="mt-5 rounded-card border border-warm-100 bg-warm-50 p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div>
-          <p className="font-bold">مشاهده فایل: {attachment.title || attachment.file_name}</p>
-          <p className="mt-1 text-xs text-warm-500">{formatPersianDate(attachment.attachment_date)} · {attachment.file_name}</p>
-        </div>
-        <FileText className="text-sage" size={22} />
-      </div>
-      {ext === "pdf" ? (
-        <iframe title={attachment.title || attachment.file_name} src={src} className="h-[520px] w-full rounded-control border border-warm-100 bg-white" />
-      ) : isImage ? (
-        <img src={src} alt={attachment.title || attachment.file_name} className="max-h-[520px] w-full rounded-control object-contain bg-white" />
-      ) : (
-        <div className="rounded-control bg-paper p-4 text-sm leading-7 text-warm-500">نمایش داخلی این فرمت محدود است. فایل در پرونده ذخیره شده و مسیر آن: <span className="numbers">{attachment.local_path}</span></div>
-      )}
-    </div>
-  );
-}
-
-function CalculationsScreen({ initialClient, settings, toast }: { initialClient: Client | null; settings: Settings; toast: ToastFn }) {
-  const [clients, setClients] = useState<Client[]>([]);
-  const [query, setQuery] = useState("");
-  const [form, setForm] = useState<Client>(initialClient ? normalizeClient(initialClient) : { ...emptyClient });
-
-  useEffect(() => {
-    setForm(initialClient ? normalizeClient(initialClient) : { ...emptyClient });
-    setQuery(initialClient?.full_name ?? "");
-  }, [initialClient]);
-
-  useEffect(() => {
-    if (!isDesktopRuntime()) return;
-    invoke<Client[]>("list_clients", { includeArchived: false }).then((items) => setClients(items.map(normalizeClient))).catch(() => setClients([]));
-  }, []);
-
-  const searchResults = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const source = needle ? clients.filter((client) => [client.full_name, client.phone, client.email].some((value) => value.toLowerCase().includes(needle))) : clients;
-    return source.slice(0, 8);
-  }, [clients, query]);
-
-  const chooseClient = (client: Client) => {
-    setForm(normalizeClient(client));
-    setQuery(client.full_name);
-  };
-
-  const result = calculateNutrition(form, settings);
-  const setField = <K extends keyof Client>(key: K, value: Client[K]) => setForm((current) => ({ ...current, [key]: value }));
-
-  return (
-    <>
-      <PageHeader title="محاسبات" subtitle="BMI، IBW، ABW، BMR، TEE، کالری هدف و ماکروها بر اساس فرمول تنظیمات محاسبه می‌شوند." />
-      <section className="grid gap-5 xl:grid-cols-[0.78fr_1.22fr]">
-        <div className="card p-5">
-          <div className="grid gap-4">
-            <div>
-              <label className="label">جست‌وجوی سریع مراجع</label>
-              <div className="relative mt-2">
-                <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={18} />
-                <input className="control w-full pr-11" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="نام، موبایل یا ایمیل مراجع را تایپ کنید" />
-              </div>
-              <div className="mt-2 max-h-64 overflow-auto rounded-control border border-warm-100 bg-warm-50 p-2">
-                {searchResults.length === 0 ? <p className="p-3 text-sm text-warm-500">مراجعی پیدا نشد. می‌توانید اطلاعات را دستی وارد کنید.</p> : searchResults.map((client) => (
-                  <button key={client.id} onClick={() => chooseClient(client)} className={cn("mb-2 flex w-full items-center justify-between rounded-control p-3 text-right text-sm hover:bg-paper", form.id === client.id && "bg-[var(--primary)] text-white")}>
-                    <span className="font-bold">{client.full_name}</span>
-                    <span className="numbers text-xs opacity-80">{client.phone || goalLabels[client.goal]}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <SelectField label="جنسیت" value={form.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
-            <NumberField label="سن" value={form.age} onChange={(value) => setField("age", value)} />
-            <NumberField label="قد" value={form.height_cm} onChange={(value) => setField("height_cm", value)} suffix="cm" />
-            <NumberField label="وزن" value={form.weight_kg} onChange={(value) => setField("weight_kg", value)} suffix="kg" />
-            <SelectField label="فعالیت" value={form.activity_level} onChange={(value) => setField("activity_level", value as ActivityLevel)} options={activityLabels} />
-            <SelectField label="هدف" value={form.goal} onChange={(value) => setField("goal", value as Goal)} options={goalLabels} />
-            <SecondaryButton icon={CheckCircle2} onClick={() => toast("محاسبات به‌روزرسانی شد.")}>به‌روزرسانی</SecondaryButton>
-          </div>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2">
-          <ResultCard label="BMI" value={formatNumber(result.bmi, 1)} helper={bmiCategory(result.bmi)} />
-          <ResultCard label="IBW" value={`${formatNumber(result.ibw, 1)} kg`} helper="وزن ایده‌آل" />
-          <ResultCard label="ABW" value={`${formatNumber(result.abw, 1)} kg`} helper="وزن تعدیل‌شده" />
-          <ResultCard label="BMR" value={`${formatNumber(result.bmr, 0)} kcal`} helper="متابولیسم پایه" />
-          <ResultCard label="TEE" value={`${formatNumber(result.tee, 0)} kcal`} helper={`ضریب فعالیت ${formatNumber(result.activityFactor, 2)}`} />
-          <ResultCard label="کالری هدف" value={`${formatNumber(result.targetCalories, 0)} kcal`} helper={goalLabels[form.goal]} />
-          <ResultCard label="پروتئین" value={`${formatNumber(result.proteinGrams, 0)} g`} helper={`${formatNumber(result.proteinPercent, 0)}٪ کالری`} />
-          <ResultCard label="کربوهیدرات" value={`${formatNumber(result.carbsGrams, 0)} g`} helper={`${formatNumber(result.carbsPercent, 0)}٪ کالری`} />
-          <ResultCard label="چربی" value={`${formatNumber(result.fatGrams, 0)} g`} helper={`${formatNumber(result.fatPercent, 0)}٪ کالری`} />
-        </div>
-      </section>
-    </>
-  );
-}
-
-function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; setSettings: (settings: Settings) => void; toast: ToastFn }) {
-  const [form, setForm] = useState<Settings>(settings);
-  const [credentials, setCredentials] = useState({ current_password: "", username: settings.username || "admin", password: "" });
-  const [services, setServices] = useState<ServiceCatalogItem[]>([]);
-  const [serviceForm, setServiceForm] = useState<ServiceCatalogItem>({ name: "", default_price: 0, active: true });
-
-  useEffect(() => {
-    setForm(settings);
-    setCredentials((current) => ({ ...current, username: settings.username || "admin" }));
-  }, [settings]);
-
-  useEffect(() => {
-    if (!isDesktopRuntime()) return;
-    invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false }).then(setServices).catch(() => setServices([]));
-  }, []);
-
-  const update = <K extends keyof Settings>(key: K, value: Settings[K]) => setForm((current) => ({ ...current, [key]: value }));
-
-  const saveSettings = async () => {
-    try {
-      const saved = isDesktopRuntime() ? await invoke<Settings>("save_settings", { settings: form }) : form;
-      setSettings(withDefaults(saved));
-      toast("تنظیمات ذخیره شد.");
-    } catch {
-      toast("ذخیره تنظیمات انجام نشد.", "error");
-    }
-  };
-
-  const saveService = async () => {
-    if (!serviceForm.name.trim()) {
-      toast("نام خدمت را وارد کنید.", "error");
-      return;
-    }
-    try {
-      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", { item: serviceForm });
-      setServices((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
-      setServiceForm({ name: "", default_price: 0, active: true });
-      toast("خدمت ذخیره شد.");
-    } catch {
-      toast("ذخیره خدمت انجام نشد.", "error");
-    }
-  };
-
-  const chooseAsset = async (kind: "logo" | "background") => {
-    try {
-      const selected = await open({ multiple: false, filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "svg"] }] });
-      if (!selected || Array.isArray(selected)) return;
-      const imported = isDesktopRuntime() ? await invoke<string>("import_brand_asset", { path: selected, kind }) : selected;
-      const key = kind === "logo" ? "logo_path" : "background_image_path";
-      update(key, imported);
-      toast(kind === "logo" ? "لوگو انتخاب شد." : "پس‌زمینه انتخاب شد.");
-    } catch {
-      toast("انتخاب فایل انجام نشد.", "error");
-    }
-  };
-
-  const exportBackup = async (kind: "db" | "json") => {
-    try {
-      const path = await invoke<string>(kind === "db" ? "export_database" : "export_data_backup");
-      toast(`پشتیبان ذخیره شد: ${path}`);
-    } catch {
-      toast("پشتیبان‌گیری انجام نشد.", "error");
-    }
-  };
-
-  const restoreBackup = async () => {
-    try {
-      const selected = await open({ multiple: false, filters: [{ name: "Dietoy Backup", extensions: ["json"] }] });
-      if (!selected || Array.isArray(selected)) return;
-      await invoke("restore_data_backup", { path: selected });
-      toast("بازیابی انجام شد. برنامه را یک بار ببندید و دوباره باز کنید.");
-    } catch {
-      toast("بازیابی انجام نشد.", "error");
-    }
-  };
-
-  const changeCredentials = async () => {
-    try {
-      await invoke("change_credentials", { input: credentials });
-      toast("اطلاعات ورود تغییر کرد.");
-      setCredentials({ current_password: "", username: credentials.username, password: "" });
-    } catch {
-      toast("تغییر رمز انجام نشد.", "error");
-    }
-  };
-
-  const applyDietoyTheme = () => {
-    setForm((current) => ({ ...current, ...dietoyTheme }));
-    toast("تم دایتوری اعمال شد. برای ذخیره، دکمه ذخیره تنظیمات را بزنید.");
-  };
-
-  const numberSetting = (key: keyof typeof defaultCalculationSettings) => (
-    <NumberField label={settingLabel(key)} value={Number(form[key] ?? defaultCalculationSettings[key])} onChange={(value) => update(key, value as Settings[typeof key])} />
-  );
-
-  return (
-    <>
-      <PageHeader title="تنظیمات" subtitle="ظاهر، اطلاعات ورود، پشتیبان‌گیری، لیست خدمات و ضرایب محاسبات را مدیریت کنید." action={<PrimaryButton icon={Save} onClick={saveSettings}>ذخیره تنظیمات</PrimaryButton>} />
-      <section className="grid gap-5 xl:grid-cols-2">
-        <div className="card p-5">
-          <h2 className="text-xl font-bold">برندینگ</h2>
-          <div className="mt-5 grid gap-4">
-            <TextField label="نام متخصص" value={form.dietitian_name} onChange={(value) => update("dietitian_name", value)} />
-            <TextField label="نام کلینیک" value={form.clinic_name} onChange={(value) => update("clinic_name", value)} />
-            <ColorField label="رنگ اصلی" value={form.primary_color} onChange={(value) => update("primary_color", value)} />
-            <ColorField label="رنگ پس‌زمینه" value={form.background_color} onChange={(value) => update("background_color", value)} />
-            <ColorField label="رنگ متن" value={form.text_color} onChange={(value) => update("text_color", value)} />
-            <div className="grid gap-2 md:grid-cols-3">
-              <SecondaryButton icon={ImageIcon} onClick={() => chooseAsset("logo")}>انتخاب لوگو</SecondaryButton>
-              <SecondaryButton icon={ImageIcon} onClick={() => chooseAsset("background")}>انتخاب پس‌زمینه</SecondaryButton>
-              <SecondaryButton icon={Palette} onClick={applyDietoyTheme}>تم دایتوری</SecondaryButton>
-            </div>
-          </div>
-        </div>
-
-        <div className="card p-5">
-          <h2 className="text-xl font-bold">ورود و پشتیبان</h2>
-          <div className="mt-5 grid gap-4">
-            <TextField label="نام کاربری" value={credentials.username} onChange={(value) => setCredentials((current) => ({ ...current, username: value }))} />
-            <TextField label="رمز فعلی" type="password" value={credentials.current_password} onChange={(value) => setCredentials((current) => ({ ...current, current_password: value }))} />
-            <TextField label="رمز جدید" type="password" value={credentials.password} onChange={(value) => setCredentials((current) => ({ ...current, password: value }))} />
-            <SecondaryButton icon={KeyRound} onClick={changeCredentials}>تغییر ورود</SecondaryButton>
-            <div className="grid gap-2 md:grid-cols-3">
-              <SecondaryButton icon={Database} onClick={() => exportBackup("db")}>خروجی SQLite</SecondaryButton>
-              <SecondaryButton icon={Download} onClick={() => exportBackup("json")}>Backup کامل</SecondaryButton>
-              <SecondaryButton icon={FileUp} onClick={restoreBackup}>Restore</SecondaryButton>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="card mt-5 p-5">
-        <h2 className="text-xl font-bold">لیست خدمات قابل انتخاب در ویزیت</h2>
-        <div className="mt-4 grid gap-3 md:grid-cols-[1fr_180px_160px_160px]">
-          <TextField label="نام خدمت" value={serviceForm.name} onChange={(value) => setServiceForm((current) => ({ ...current, name: value }))} />
-          <MoneyField label="هزینه پیش‌فرض" value={serviceForm.default_price} onChange={(value) => setServiceForm((current) => ({ ...current, default_price: value }))} />
-          <SelectField label="وضعیت" value={serviceForm.active ? "active" : "inactive"} onChange={(value) => setServiceForm((current) => ({ ...current, active: value === "active" }))} options={{ active: "فعال", inactive: "غیرفعال" }} />
-          <div className="flex items-end"><SecondaryButton icon={Save} onClick={saveService}>ذخیره خدمت</SecondaryButton></div>
-        </div>
-        <div className="mt-5 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {services.length === 0 ? <p className="text-sm text-warm-500">هنوز خدمتی تعریف نشده است.</p> : services.map((service) => (
-            <button key={service.id} onClick={() => setServiceForm(service)} className="rounded-control border border-warm-100 bg-warm-50 p-4 text-right hover:bg-paper">
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-bold">{service.name}</span>
-                <span className={cn("rounded-full px-2 py-1 text-xs", service.active ? "bg-emerald/10 text-emerald" : "bg-warm-100 text-warm-500")}>{service.active ? "فعال" : "غیرفعال"}</span>
-              </div>
-              <p className="numbers mt-2 text-sm text-warm-500">{formatNumber(service.default_price, 0)} تومان</p>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="card mt-5 p-5">
-        <h2 className="text-xl font-bold">تنظیمات فرمول و ماکرو</h2>
-        <div className="mt-5 grid gap-4 md:grid-cols-3 xl:grid-cols-4">
-          {numberSetting("calc_ibw_bmi_factor")}
-          {numberSetting("calc_abw_divisor")}
-          {numberSetting("calc_bmr_base")}
-          {numberSetting("calc_male_factor")}
-          {numberSetting("calc_female_factor")}
-          {numberSetting("calc_bmr_adjustment")}
-          {numberSetting("calc_activity_sedentary")}
-          {numberSetting("calc_activity_light")}
-          {numberSetting("calc_activity_moderate")}
-          {numberSetting("calc_activity_active")}
-          {numberSetting("calc_activity_very_active")}
-          {numberSetting("calc_goal_loss")}
-          {numberSetting("calc_goal_maintain")}
-          {numberSetting("calc_goal_gain")}
-          {numberSetting("macro_protein_percent")}
-          {numberSetting("macro_carb_percent")}
-          {numberSetting("macro_fat_percent")}
-        </div>
-      </section>
-    </>
-  );
-}
-
-function settingLabel(key: keyof typeof defaultCalculationSettings) {
-  const labels: Record<keyof typeof defaultCalculationSettings, string> = {
-    calc_ibw_bmi_factor: "ضریب IBW/BMI",
-    calc_abw_divisor: "تقسیم‌کننده ABW",
-    calc_bmr_base: "ضریب پایه BMR",
-    calc_male_factor: "ضریب مرد",
-    calc_female_factor: "ضریب زن",
-    calc_bmr_adjustment: "ضریب تعدیل BMR",
-    calc_activity_sedentary: "فعالیت کم‌تحرک",
-    calc_activity_light: "فعالیت سبک",
-    calc_activity_moderate: "فعالیت متوسط",
-    calc_activity_active: "فعال",
-    calc_activity_very_active: "بسیار فعال",
-    calc_goal_loss: "کسری کاهش وزن",
-    calc_goal_maintain: "ثبات وزن",
-    calc_goal_gain: "مازاد افزایش وزن",
-    macro_protein_percent: "پروتئین ٪",
-    macro_carb_percent: "کربوهیدرات ٪",
-    macro_fat_percent: "چربی ٪",
-  };
-  return labels[key];
-}
-
-function PageHeader({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
-  return (
-    <header className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-      <div>
-        <h1 className="text-3xl font-bold text-charcoal">{title}</h1>
-        <p className="mt-2 text-sm leading-7 text-warm-500">{subtitle}</p>
-      </div>
-      {action}
-    </header>
-  );
-}
-
-function PrimaryButton({ icon: Icon, children, type = "button", onClick }: { icon: LucideIcon; children: ReactNode; type?: "button" | "submit"; onClick?: () => void }) {
-  return (
-    <button type={type} onClick={onClick} className="soft-transition flex h-12 w-full items-center justify-center gap-2 rounded-control bg-[var(--primary)] px-5 text-sm font-bold text-white shadow-lift hover:brightness-105">
-      <Icon size={20} />
-      {children}
-    </button>
-  );
-}
-
-function SecondaryButton({ icon: Icon, children, onClick }: { icon: LucideIcon; children: ReactNode; onClick?: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="soft-transition flex h-11 items-center justify-center gap-2 rounded-control border border-warm-100 bg-paper px-4 text-sm font-semibold text-charcoal hover:bg-warm-50">
-      <Icon size={18} />
-      {children}
-    </button>
-  );
-}
-
-function Stat({ label, value, icon: Icon }: { label: string; value?: number; icon: LucideIcon }) {
-  return (
-    <div className="card p-5">
-      <Icon className="text-sage" size={24} />
-      <p className="mt-5 text-sm text-warm-500">{label}</p>
-      <p className="numbers mt-2 text-3xl font-bold">{value === undefined ? "—" : formatNumber(value)}</p>
-    </div>
-  );
-}
-
-function ResultCard({ label, value, helper }: { label: string; value: string; helper: string }) {
-  return (
-    <div className="card p-5">
-      <p className="text-sm text-warm-500">{label}</p>
-      <p className="numbers mt-3 text-3xl font-bold text-charcoal">{value}</p>
-      <p className="mt-2 text-xs text-olive">{helper}</p>
-    </div>
-  );
-}
-
-function IconInput({ icon: Icon, label, value, onChange, type = "text", autoComplete }: { icon: LucideIcon; label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <div className="relative mt-2">
-        <Icon className="absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={18} />
-        <input className="control w-full pr-11" value={value} onChange={(event) => onChange(event.target.value)} type={type} autoComplete={autoComplete} />
-      </div>
-    </label>
-  );
-}
-
-function TextField({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (value: string) => void; type?: string }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <input className="control mt-2 w-full" value={value} onChange={(event) => onChange(event.target.value)} type={type} />
-    </label>
-  );
-}
-
-function TextArea({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <textarea className="control mt-2 min-h-24 w-full" value={value} onChange={(event) => onChange(event.target.value)} />
-    </label>
-  );
-}
-
-function NumberField({ label, value, onChange, suffix }: { label: string; value: number; onChange: (value: number) => void; suffix?: string }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <div className="relative mt-2">
-        <input className="control numbers w-full" value={Number.isFinite(value) ? value : 0} onChange={(event) => onChange(Number(event.target.value))} type="number" step="0.1" />
-        {suffix && <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xs text-warm-500">{suffix}</span>}
-      </div>
-    </label>
-  );
-}
-
-function MoneyField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <input className="control numbers mt-2 w-full" inputMode="numeric" value={moneyInput(value)} onChange={(event) => onChange(parseMoneyInput(event.target.value))} placeholder="مثلاً ۱۲۰٬۰۰۰" />
-    </label>
-  );
-}
-
-function TimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <input className="control numbers mt-2 w-full" value={value} onChange={(event) => onChange(event.target.value)} type="time" />
-    </label>
-  );
-}
-
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <div className="mt-2 flex gap-2">
-        <input className="h-12 w-16 rounded-control border border-warm-100 bg-paper" value={value} onChange={(event) => onChange(event.target.value)} type="color" />
-        <input className="control numbers flex-1" value={value} onChange={(event) => onChange(event.target.value)} />
-      </div>
-    </label>
-  );
-}
-
-function SelectPlain({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: Record<string, string> }) {
-  return <select className="control w-full" value={value} onChange={(event) => onChange(event.target.value)}>{Object.entries(options).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>;
+function OverrideField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return <label className="block"><span className="text-xs font-medium text-warm-500">{label}</span><input className="control numbers mt-1 h-11 w-full text-left" type="number" min="0" value={value} onChange={(event) => onChange(event.target.value)} placeholder="خودکار" /></label>;
 }
 
 function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Record<string, string> }) {
-  return (
-    <label className="block">
-      <span className="label">{label}</span>
-      <div className="mt-2"><SelectPlain value={value} onChange={onChange} options={options} /></div>
-    </label>
-  );
+  return <div><label className="label">{label}</label><select className="control mt-2 w-full" value={value} onChange={(event) => onChange(event.target.value)}>{Object.entries(options).map(([key, title]) => <option key={key} value={key}>{title}</option>)}</select></div>;
 }
 
-function DateField({ label, value, onChange, compact = false }: { label: string; value: string; onChange: (value: string) => void; compact?: boolean }) {
-  const [display, setDisplay] = useState(value ? formatJalaliInput(value) : "");
-  const currentJalali = isoToJalali(value || todayIsoDate());
-  const [view, setView] = useState({ jy: currentJalali.jy, jm: currentJalali.jm });
-  const monthDays = jalaliMonthLength(view.jy, view.jm);
-  const start = monthStartWeekday(view.jy, view.jm);
-
-  useEffect(() => {
-    setDisplay(value ? formatJalaliInput(value) : "");
-    const next = isoToJalali(value || todayIsoDate());
-    setView({ jy: next.jy, jm: next.jm });
-  }, [value]);
-
-  const changeMonth = (delta: number) => {
-    setView((current) => {
-      let jm = current.jm + delta;
-      let jy = current.jy;
-      if (jm < 1) { jm = 12; jy -= 1; }
-      if (jm > 12) { jm = 1; jy += 1; }
-      return { jy, jm };
-    });
-  };
-
-  const setText = (next: string) => {
-    setDisplay(next);
-    if (!next.trim()) {
-      onChange("");
-      return;
-    }
-    const parsed = parseJalaliInput(next);
-    if (parsed) onChange(parsed);
-  };
-
-  const selectDay = (day: number) => {
-    const iso = jalaliToIso(view.jy, view.jm, day);
-    onChange(iso);
-    setDisplay(formatJalaliInput(iso));
-  };
-
-  return (
-    <label className="relative block">
-      <span className="label">{label}</span>
-      <input className={cn("control numbers w-full", compact ? "mt-2" : "mt-2")} value={display} onChange={(event) => setText(event.target.value)} placeholder="۱۴۰۵/۰۴/۱۷" />
-      <div className="mt-2 rounded-control border border-warm-100 bg-paper p-3 shadow-sm">
-        <div className="mb-3 flex items-center justify-between">
-          <button type="button" className="rounded-full bg-warm-50 p-2" onClick={() => changeMonth(-1)}><ChevronRight size={16} /></button>
-          <span className="font-bold">{persianMonthNames[view.jm - 1]} {formatNumber(view.jy, 0)}</span>
-          <button type="button" className="rounded-full bg-warm-50 p-2" onClick={() => changeMonth(1)}><ChevronLeft size={16} /></button>
-        </div>
-        <div className="grid grid-cols-7 gap-1 text-center text-xs text-warm-500">
-          {persianWeekdays.map((day) => <span key={day}>{day}</span>)}
-        </div>
-        <div className="mt-2 grid grid-cols-7 gap-1">
-          {Array.from({ length: start + monthDays }).map((_, index) => {
-            const day = index - start + 1;
-            if (day < 1) return <span key={`blank-${index}`} />;
-            const iso = jalaliToIso(view.jy, view.jm, day);
-            const active = iso === dateOnly(value);
-            return (
-              <button key={day} type="button" onClick={() => selectDay(day)} className={cn("numbers rounded-full py-2 text-xs hover:bg-warm-50", active && "bg-[var(--primary)] text-white hover:bg-[var(--primary)]")}>
-                {formatNumber(day, 0)}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      {value && <span className="mt-1 block text-xs text-warm-500">{formatPersianDate(dateOnly(value))}</span>}
-    </label>
-  );
-}
-
-function EmptyState({ icon: Icon, title, text }: { icon: LucideIcon; title: string; text: string }) {
-  return (
-    <div className="rounded-card border border-dashed border-warm-200 bg-warm-50 p-6 text-center">
-      <Icon className="mx-auto text-sage" size={28} />
-      <p className="mt-3 font-bold">{title}</p>
-      <p className="mt-2 text-sm leading-7 text-warm-500">{text}</p>
-    </div>
-  );
+function EmptyState({ icon: Icon, title, text }: { icon: typeof Search; title: string; text: string }) {
+  return <div className="grid place-items-center py-8 text-center"><div className="grid h-14 w-14 place-items-center rounded-card bg-warm-50 text-sage"><Icon size={25} /></div><h3 className="mt-4 text-lg font-bold">{title}</h3><p className="mt-2 text-sm text-warm-500">{text}</p></div>;
 }
 
 function SkeletonRows() {
-  return <div className="grid gap-3">{[1, 2, 3].map((item) => <div key={item} className="h-20 animate-pulse rounded-card bg-warm-50" />)}</div>;
+  return <div className="grid gap-3">{[0, 1, 2].map((item) => <div key={item} className="card flex animate-pulse items-center justify-between p-5"><div><div className="h-5 w-40 rounded bg-warm-100" /><div className="mt-3 h-4 w-64 rounded bg-warm-100" /></div><div className="h-10 w-28 rounded-control bg-warm-100" /></div>)}</div>;
 }
 
 function ToastStack({ toasts }: { toasts: Toast[] }) {
-  return (
-    <div className="fixed bottom-5 left-5 z-50 grid w-[min(420px,calc(100vw-40px))] gap-2">
-      {toasts.map((toast) => (
-        <div key={toast.id} className={cn("rounded-control px-4 py-3 text-sm font-semibold shadow-soft", toast.kind === "error" ? "bg-red-50 text-red-700" : "bg-emerald/10 text-emerald")}>
-          {toast.text}
-        </div>
-      ))}
-    </div>
-  );
+  return <div className="fixed bottom-5 left-5 z-50 grid gap-2">{toasts.map((toast) => <div key={toast.id} className={cn("flex min-h-12 items-center gap-3 rounded-control border bg-paper px-4 text-sm shadow-soft", toast.kind === "error" ? "border-red-200 text-red-700" : "border-warm-100 text-charcoal")}><CheckCircle2 size={18} className={toast.kind === "error" ? "text-red-500" : "text-[var(--primary)]"} /><span>{toast.text}</span></div>)}</div>;
 }

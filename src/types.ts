@@ -1,8 +1,6 @@
 export type Gender = "female" | "male";
 export type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
 export type Goal = "lose" | "maintain" | "gain";
-export type VisitStatus = "tentative" | "confirmed" | "done" | "cancelled";
-export type AttachmentCategory = "body_analysis" | "lab" | "medical_report" | "other";
 
 export interface Client {
   id?: number;
@@ -10,8 +8,6 @@ export interface Client {
   phone: string;
   email: string;
   profile_image_path: string;
-  next_visit_date?: string;
-  next_visit_status?: VisitStatus;
   gender: Gender;
   age: number;
   height_cm: number;
@@ -35,54 +31,50 @@ export interface ClientRecord {
   updated_at?: string;
 }
 
-export interface Attachment {
-  id?: number;
-  client_id: number;
-  visit_id?: number | null;
-  category: AttachmentCategory;
-  title: string;
-  file_name: string;
-  local_path: string;
-  attachment_date: string;
-  notes: string;
-  created_at?: string;
-  updated_at?: string;
-  sync_id?: string;
-  sync_status?: string;
-}
-
 export interface Visit {
   id?: number;
   client_id: number;
   visit_date: string;
-  status: VisitStatus;
-  notes: string;
+  visit_time: string;
+  status: string;
+  reason: string;
+  clinical_notes: string;
+  private_notes: string;
+  next_visit_enabled: boolean;
+  next_visit_date: string;
+  next_visit_time: string;
+  next_visit_status: string;
   total_fee: number;
   created_at?: string;
   updated_at?: string;
-  sync_id?: string;
-  sync_status?: string;
 }
 
-export interface ServiceCatalogItem {
+export interface VisitMeasurements {
   id?: number;
-  name: string;
-  default_price: number;
-  active: boolean;
+  visit_id?: number;
+  weight_kg: number;
+  height_cm?: number;
+  bmi_snapshot?: number;
+  body_fat_percent?: number;
+  muscle_mass?: number;
+  visceral_fat?: number;
+  waist_cm?: number;
+  abdomen_cm?: number;
+  hip_cm?: number;
+  chest_cm?: number;
+  arm_cm?: number;
+  thigh_cm?: number;
+  calf_cm?: number;
+  neck_cm?: number;
+  custom_measurements_json?: string;
+  notes: string;
   created_at?: string;
   updated_at?: string;
 }
 
-export interface VisitService {
-  id?: number;
-  visit_id: number;
-  service_id?: number | null;
-  service_name_snapshot: string;
-  price: number;
-  quantity: number;
-  total: number;
-  notes: string;
-  created_at?: string;
+export interface VisitDetail {
+  visit: Visit;
+  measurements?: VisitMeasurements | null;
 }
 
 export interface Settings {
@@ -94,23 +86,6 @@ export interface Settings {
   logo_path: string;
   background_image_path: string;
   username: string;
-  calc_ibw_bmi_factor?: number;
-  calc_abw_divisor?: number;
-  calc_bmr_base?: number;
-  calc_male_factor?: number;
-  calc_female_factor?: number;
-  calc_bmr_adjustment?: number;
-  calc_activity_sedentary?: number;
-  calc_activity_light?: number;
-  calc_activity_moderate?: number;
-  calc_activity_active?: number;
-  calc_activity_very_active?: number;
-  calc_goal_loss?: number;
-  calc_goal_maintain?: number;
-  calc_goal_gain?: number;
-  macro_protein_percent?: number;
-  macro_carb_percent?: number;
-  macro_fat_percent?: number;
 }
 
 export interface DashboardStats {
