@@ -6,6 +6,7 @@ import "@fontsource/vazirmatn/600.css";
 import "@fontsource/vazirmatn/700.css";
 import "./styles.css";
 import "./tauriCommandCompat";
+import "./buildMarker";
 import App from "./App";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
