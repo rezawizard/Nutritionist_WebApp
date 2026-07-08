@@ -143,10 +143,29 @@ export interface Settings {
   macro_fat_percent?: number;
 }
 
+export interface DashboardVisitSummary {
+  id?: number;
+  client_id: number;
+  client_name: string;
+  visit_date: string;
+  visit_time: string;
+  status: string;
+  total_fee: number;
+}
+
 export interface DashboardStats {
   total_clients: number;
   active_clients: number;
+  archived_clients: number;
+  goal_counts: Record<Goal, number>;
+  visits_today: number;
+  visits_next_7_days: number;
+  visits_this_month: number;
+  revenue_this_month: number;
+  upcoming_followups: number;
   recent_clients: Client[];
+  upcoming_visits: DashboardVisitSummary[];
+  recent_visits: DashboardVisitSummary[];
 }
 
 export type Screen = "dashboard" | "clients" | "client-form" | "calculator" | "settings";

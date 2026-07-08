@@ -151,13 +151,19 @@ export function formatNumber(value: number, digits = 0) {
   }).format(value);
 }
 
+export function stripNumericSeparators(value: string) {
+  return value.replace(/([۰-۹٠-٩0-9])[\u066C٬,،]([۰-۹٠-٩0-9])/g, "$1$2");
+}
+
 export function formatPersianDate(date: Date | string = new Date()) {
-  return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+  const target = typeof date === "string" ? new Date(`${date}T00:00:00`) : date;
+  const formatted = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
-  }).format(typeof date === "string" ? new Date(date) : date);
+  }).format(Number.isNaN(target.getTime()) ? new Date() : target);
+  return stripNumericSeparators(formatted);
 }
 
 export function todayIsoDate() {
@@ -292,5 +298,10 @@ export function daysInJalaliMonth(year: number, month: number) {
 export function getErrorMessage(error: unknown, fallback: string) {
   if (typeof error === "string" && error.trim()) return error;
   if (error instanceof Error && error.message.trim()) return error.message;
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>;
+    const message = record.message ?? record.error ?? record.reason;
+    if (typeof message === "string" && message.trim()) return message;
+  }
   return fallback;
 }

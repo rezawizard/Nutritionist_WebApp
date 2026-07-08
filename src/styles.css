@@ -88,4 +88,13 @@ select {
   .helper {
     @apply text-xs leading-6 text-warm-500;
   }
+
+
+  .filter-chip {
+    @apply soft-transition h-10 rounded-control border border-warm-100 bg-warm-50 px-4 text-xs font-semibold text-warm-500 hover:border-[var(--primary)] hover:bg-white hover:text-charcoal;
+  }
+
+  .filter-chip-active {
+    @apply border-[var(--primary)] bg-[var(--primary)] text-white shadow-lift hover:bg-[var(--primary)] hover:text-white;
+  }
 }

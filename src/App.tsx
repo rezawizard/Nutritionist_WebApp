@@ -2,14 +2,18 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
+  BadgeDollarSign,
   Calculator,
   Camera,
+  CalendarCheck,
   CalendarDays,
   CheckCircle2,
+  Clock3,
   ClipboardList,
   Database,
   Download,
   FileUp,
+  FileText,
   FolderOpen,
   Home,
   Image as ImageIcon,
@@ -26,6 +30,7 @@ import {
   Search,
   Settings as SettingsIcon,
   Sparkles,
+  Target,
   TrendingUp,
   UserRound,
   Users,
@@ -77,7 +82,40 @@ type Toast = { id: number; text: string; kind?: "success" | "error" };
 type ToastFn = (text: string, kind?: Toast["kind"]) => void;
 type FieldErrors = Partial<Record<"full_name" | "age" | "height_cm" | "weight_kg" | "profile_image_path" | "visit_date" | "visit_time" | "next_visit_date" | "next_visit_time", string>>;
 type ProfileTab = "summary" | "visits" | "files" | "services" | "base";
+type ClientGoalFilter = "all" | Goal;
 type CalcSettingKey = keyof typeof defaultCalculationSettings;
+
+const clientGoalFilters: Record<ClientGoalFilter, string> = {
+  all: "همه هدف‌ها",
+  ...goalLabels,
+};
+
+const emptyDashboardStats: DashboardStats = {
+  total_clients: 0,
+  active_clients: 0,
+  archived_clients: 0,
+  goal_counts: { lose: 0, maintain: 0, gain: 0 },
+  visits_today: 0,
+  visits_next_7_days: 0,
+  visits_this_month: 0,
+  revenue_this_month: 0,
+  upcoming_followups: 0,
+  recent_clients: [],
+  upcoming_visits: [],
+  recent_visits: [],
+};
+
+const visitStatusLabels: Record<string, string> = {
+  tentative: "پیشنهادی",
+  confirmed: "تأیید شده",
+  scheduled: "زمان‌بندی شده",
+  done: "انجام شده",
+  completed: "تکمیل شده",
+  cancelled: "لغو شده",
+  canceled: "لغو شده",
+};
+
+const goalKeys: Goal[] = ["lose", "maintain", "gain"];
 
 const calculationSettingsFields: Array<{ key: CalcSettingKey; label: string; step?: number }> = [
   { key: "calc_ibw_bmi_factor", label: "ضریب BMI برای IBW", step: 0.1 },
@@ -162,7 +200,7 @@ export default function App() {
         setSettings(merged);
         applyVisualSettings(merged);
       })
-      .catch(() => push("تنظیمات خوانده نشد.", "error"));
+      .catch((error) => push(getErrorMessage(error, "تنظیمات خوانده نشد."), "error"));
   }, []);
 
   const openClientForm = (client?: Client) => {
@@ -314,8 +352,8 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
       }
       const ok = await invoke<boolean>("login", { input: { username, password } });
       ok ? onLogin() : toast("نام کاربری یا رمز عبور درست نیست.", "error");
-    } catch {
-      toast("ورود انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "ورود انجام نشد."), "error");
     } finally {
       setLoading(false);
     }
@@ -362,27 +400,31 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
   const [stats, setStats] = useState<DashboardStats | null>(null);
   useEffect(() => {
     if (!isDesktopRuntime()) {
-      setStats({ total_clients: 0, active_clients: 0, recent_clients: [] });
+      setStats(emptyDashboardStats);
       return;
     }
     setStats(null);
-    invoke<DashboardStats>("dashboard_stats").then(setStats).catch(() => setStats({ total_clients: 0, active_clients: 0, recent_clients: [] }));
+    invoke<DashboardStats>("dashboard_stats").then(setStats).catch(() => setStats(emptyDashboardStats));
   }, [version]);
+
+  const goalTotal = goalKeys.reduce((sum, goal) => sum + (stats?.goal_counts[goal] ?? 0), 0);
+  const maxGoalCount = Math.max(1, ...goalKeys.map((goal) => stats?.goal_counts[goal] ?? 0));
 
   return (
     <>
       <PageHeader
         title={settings.dietitian_name ? `سلام، ${settings.dietitian_name}` : "روز آرامی برای مراقبت بهتر"}
-        subtitle={`امروز ${formatPersianDate()} است. پرونده مراجعین و محاسبات تغذیه‌ای شما روی همین دستگاه ذخیره می‌شود.`}
+        subtitle={`امروز ${formatPersianDate()} است. پرونده مراجعین، پیگیری‌ها و گزارش‌های کاری شما روی همین دستگاه ذخیره می‌شود.`}
         action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>}
       />
-      <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+
+      <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="card p-6 md:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-olive">اقدام سریع</p>
               <h2 className="mt-3 text-2xl font-bold">شروع ویزیت بدون شلوغی</h2>
-              <p className="mt-3 max-w-xl text-sm leading-7 text-warm-500">برای ثبت پرونده تازه یا محاسبه سریع نیاز انرژی و ماکروها، همین‌جا شروع کنید.</p>
+              <p className="mt-3 max-w-xl text-sm leading-7 text-warm-500">برای ثبت پرونده تازه، محاسبه سریع انرژی، یا بررسی مراجعین نیازمند پیگیری از همین‌جا شروع کنید.</p>
             </div>
             <Sparkles className="text-sage" size={28} />
           </div>
@@ -391,23 +433,102 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
             <SecondaryButton icon={Calculator} onClick={onCalculator}>محاسبات تغذیه</SecondaryButton>
           </div>
         </div>
+
         <div className="grid grid-cols-2 gap-4">
           <Stat label="همه مراجعین" value={stats?.total_clients} icon={Users} />
           <Stat label="فعال" value={stats?.active_clients} icon={Leaf} />
+          <Stat label="ویزیت امروز" value={stats?.visits_today} icon={CalendarCheck} />
+          <Stat label="پیگیری آینده" value={stats?.upcoming_followups} icon={Clock3} />
         </div>
       </section>
-      <section className="card mt-5 p-6">
-        <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">مراجعین اخیر</h2><Users className="text-sage" size={22} /></div>
-        {!stats ? <SkeletonRows /> : stats.recent_clients.length === 0 ? <EmptyState icon={Users} title="هنوز مراجعی ثبت نشده" text="اولین پرونده را بسازید تا این بخش زنده شود." /> : <div className="grid gap-3">{stats.recent_clients.map((client) => <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} />)}</div>}
+
+      <section className="mt-5 grid gap-5 xl:grid-cols-4">
+        <Stat label="ویزیت ۷ روز آینده" value={stats?.visits_next_7_days} icon={CalendarDays} />
+        <Stat label="ویزیت این ماه" value={stats?.visits_this_month} icon={ClipboardList} />
+        <Stat label="مراجع بایگانی" value={stats?.archived_clients} icon={Archive} />
+        <div className="card p-5">
+          <div className="mb-7 flex items-center justify-between text-warm-500"><span className="text-sm">درآمد خدمات این ماه</span><BadgeDollarSign size={21} /></div>
+          {stats === null ? <div className="h-10 w-28 animate-pulse rounded-control bg-warm-100" /> : <p className="numbers text-3xl font-bold text-charcoal">{formatNumber(Math.round(stats.revenue_this_month))}</p>}
+          <p className="mt-2 text-xs text-warm-500">تومان</p>
+        </div>
+      </section>
+
+      <section className="mt-5 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+        <div className="card p-6">
+          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">ترکیب هدف مراجعین فعال</h2><Target className="text-sage" size={22} /></div>
+          {!stats ? <SkeletonRows /> : goalTotal === 0 ? <EmptyState icon={Target} title="هنوز داده‌ای برای هدف‌ها نیست" text="بعد از ثبت مراجع، ترکیب کاهش، ثبات و افزایش وزن اینجا دیده می‌شود." /> : (
+            <div className="grid gap-4">
+              {goalKeys.map((goal) => {
+                const count = stats.goal_counts[goal] ?? 0;
+                const percent = goalTotal ? Math.round((count / goalTotal) * 100) : 0;
+                const width = Math.max(8, Math.round((count / maxGoalCount) * 100));
+                return (
+                  <div key={goal}>
+                    <div className="mb-2 flex items-center justify-between text-sm">
+                      <span className="font-semibold">{goalLabels[goal]}</span>
+                      <span className="numbers text-warm-500">{formatNumber(count)} نفر · {toPersianDigits(percent)}٪</span>
+                    </div>
+                    <div className="h-3 overflow-hidden rounded-full bg-warm-100">
+                      <div className="h-full rounded-full bg-[var(--primary)]" style={{ width: `${width}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="card p-6">
+          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">ویزیت‌های پیش‌رو</h2><CalendarDays className="text-sage" size={22} /></div>
+          {!stats ? <SkeletonRows /> : stats.upcoming_visits.length === 0 ? <EmptyState icon={CalendarDays} title="ویزیت آینده‌ای ثبت نشده" text="وقتی برای مراجعین ویزیت یا پیگیری آینده ثبت شود، اینجا نمایش داده می‌شود." /> : (
+            <div className="grid gap-3">
+              {stats.upcoming_visits.map((visit) => <DashboardVisitRow key={`${visit.id}-${visit.visit_date}`} visit={visit} />)}
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="mt-5 grid gap-5 xl:grid-cols-2">
+        <div className="card p-6">
+          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">مراجعین اخیر</h2><Users className="text-sage" size={22} /></div>
+          {!stats ? <SkeletonRows /> : stats.recent_clients.length === 0 ? <EmptyState icon={Users} title="هنوز مراجعی ثبت نشده" text="اولین پرونده را بسازید تا این بخش زنده شود." /> : <div className="grid gap-3">{stats.recent_clients.map((client) => <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} />)}</div>}
+        </div>
+
+        <div className="card p-6">
+          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">آخرین ویزیت‌ها</h2><TrendingUp className="text-sage" size={22} /></div>
+          {!stats ? <SkeletonRows /> : stats.recent_visits.length === 0 ? <EmptyState icon={ClipboardList} title="هنوز ویزیتی ثبت نشده" text="بعد از ثبت اولین ویزیت، تاریخچه سریع اینجا دیده می‌شود." /> : (
+            <div className="grid gap-3">
+              {stats.recent_visits.map((visit) => <DashboardVisitRow key={`${visit.id}-${visit.visit_date}-recent`} visit={visit} />)}
+            </div>
+          )}
+        </div>
       </section>
     </>
   );
 }
 
+function DashboardVisitRow({ visit }: { visit: DashboardStats["upcoming_visits"][number] }) {
+  return (
+    <div className="rounded-card border border-warm-100 bg-white p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="font-bold">{visit.client_name}</p>
+          <p className="mt-2 text-xs leading-6 text-warm-500">{formatPersianDate(visit.visit_date)}{visit.visit_time ? ` · ${visit.visit_time}` : ""} · {visitStatusLabels[visit.status] ?? visit.status}</p>
+        </div>
+        <div className="numbers rounded-control bg-warm-50 px-3 py-2 text-sm font-semibold text-charcoal">
+          {formatNumber(Math.round(visit.total_fee))} تومان
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { version: number; onNew: () => void; onEdit: (client: Client) => void; onCalculate: (client: Client) => void; onChanged: () => void; toast: ToastFn }) {
   const [clients, setClients] = useState<Client[] | null>(null);
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
+  const [goalFilter, setGoalFilter] = useState<ClientGoalFilter>("all");
 
   useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -415,37 +536,66 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
       return;
     }
     setClients(null);
-    invoke<Client[]>("list_clients", { includeArchived }).then(setClients).catch(() => setClients([]));
-  }, [version, includeArchived]);
+    invoke<Client[]>("list_clients", { includeArchived })
+      .then(setClients)
+      .catch((error) => {
+        setClients([]);
+        toast(getErrorMessage(error, "فهرست مراجعین خوانده نشد."), "error");
+      });
+  }, [version, includeArchived, toast]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return (clients ?? []).filter((client) =>
-      [client.full_name, client.phone, client.email].some((value) => value.toLowerCase().includes(needle)),
-    );
-  }, [clients, query]);
+    return (clients ?? []).filter((client) => {
+      const goalMatches = goalFilter === "all" || client.goal === goalFilter;
+      const queryMatches = !needle || [client.full_name, client.phone, client.email, goalLabels[client.goal]]
+        .some((value) => String(value ?? "").toLowerCase().includes(needle));
+      return goalMatches && queryMatches;
+    });
+  }, [clients, query, goalFilter]);
+
+  const visibleCount = filtered.length;
+  const totalCount = clients?.length ?? 0;
+
   const archive = async (client: Client) => {
-    await invoke("archive_client", { id: client.id, archived: !client.archived });
-    toast(client.archived ? "مراجع فعال شد." : "مراجع بایگانی شد.");
-    onChanged();
+    try {
+      await invoke("archive_client", { id: client.id, archived: !client.archived });
+      toast(client.archived ? "مراجع فعال شد." : "مراجع بایگانی شد.");
+      onChanged();
+    } catch (error) {
+      toast(getErrorMessage(error, "تغییر وضعیت بایگانی انجام نشد."), "error");
+    }
   };
 
   return (
     <>
-      <PageHeader title="مراجعین" subtitle="جست‌وجو، ویرایش و مدیریت پرونده‌ها با تمرکز روی اطلاعات لازم در ویزیت." action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>} />
+      <PageHeader title="مراجعین" subtitle="جست‌وجو، فیلتر براساس هدف، و مدیریت پرونده‌ها با کمترین کلیک." action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>} />
       <section className="card p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={20} />
-            <input className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی نام مراجع" />
+            <input className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی نام، موبایل، ایمیل یا هدف" />
           </div>
           <label className="flex h-12 items-center gap-2 rounded-control border border-warm-100 bg-warm-50 px-4 text-sm text-warm-500">
             <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
             نمایش بایگانی
           </label>
         </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {Object.entries(clientGoalFilters).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setGoalFilter(key as ClientGoalFilter)}
+              className={cn("filter-chip", goalFilter === key && "filter-chip-active")}
+            >
+              {label}
+            </button>
+          ))}
+          <span className="numbers mr-auto text-xs text-warm-500">{clients ? `${toPersianDigits(visibleCount)} از ${toPersianDigits(totalCount)}` : "در حال خواندن"}</span>
+        </div>
         <div className="mt-5 grid gap-3">
-          {!clients ? <SkeletonRows /> : filtered.length === 0 ? <EmptyState icon={Search} title="موردی پیدا نشد" text="نام را تغییر دهید یا مراجع جدید ثبت کنید." /> : filtered.map((client) => (
+          {!clients ? <SkeletonRows /> : filtered.length === 0 ? <EmptyState icon={Search} title="موردی پیدا نشد" text={query || goalFilter !== "all" ? "فیلتر هدف یا عبارت جست‌وجو را تغییر دهید." : "اولین پرونده را ثبت کنید."} /> : filtered.map((client) => (
             <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} onCalculate={() => onCalculate(client)} onArchive={() => archive(client)} />
           ))}
         </div>
@@ -739,6 +889,21 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     }
   };
 
+  const exportClientReport = async () => {
+    if (!client?.id) {
+      toast("اول پرونده مراجعه‌کننده را ذخیره کنید.", "error");
+      return;
+    }
+    try {
+      const path = await invoke<string>("export_client_report", { clientId: client.id });
+      toast(`پرونده چاپی ساخته و باز شد: ${path}`);
+    } catch (error) {
+      const message = getErrorMessage(error, "ساخت پرونده چاپ/PDF انجام نشد.");
+      setTopError(message);
+      toast(message, "error");
+    }
+  };
+
   const openAttachment = async (attachment: Attachment) => {
     if (!attachment.id) return;
     try {
@@ -931,6 +1096,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           />
           <SecondaryButton icon={FileUp} onClick={chooseAttachment}>افزودن فایل</SecondaryButton>
           <SecondaryButton icon={FolderOpen} onClick={openClientFolder}>باز کردن پوشه پرونده</SecondaryButton>
+          <SecondaryButton icon={FileText} onClick={exportClientReport}>ساخت پرونده چاپ/PDF</SecondaryButton>
         </div>
       </div>
       <div className="rounded-card border border-warm-100 bg-white p-5">
@@ -994,7 +1160,16 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
 
   return (
     <>
-      <PageHeader title={client ? "پرونده مراجعه‌کننده" : "مراجعه‌کننده جدید"} subtitle={client ? "اطلاعات، ویزیت‌ها و روند تغییرات مراجعه‌کننده را یکجا ببینید." : "اطلاعات پایه برای محاسبه انرژی و پیگیری ویزیت را وارد کنید."} action={<PrimaryButton icon={Save} onClick={save}>ذخیره پرونده</PrimaryButton>} />
+      <PageHeader
+        title={client ? "پرونده مراجعه‌کننده" : "مراجعه‌کننده جدید"}
+        subtitle={client ? "اطلاعات، ویزیت‌ها و روند تغییرات مراجعه‌کننده را یکجا ببینید." : "اطلاعات پایه برای محاسبه انرژی و پیگیری ویزیت را وارد کنید."}
+        action={
+          <div className="flex flex-wrap gap-2">
+            {client?.id && <SecondaryButton icon={FileText} onClick={exportClientReport}>پرونده چاپ/PDF</SecondaryButton>}
+            <PrimaryButton icon={Save} onClick={save}>ذخیره پرونده</PrimaryButton>
+          </div>
+        }
+      />
       <section className="card p-6">
         {topError && <ErrorSummary message={topError} />}
         {client?.id && (
@@ -1063,8 +1238,8 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
         : selected;
       setField("profile_image_path", imported);
       toast("عکس پروفایل انتخاب شد.");
-    } catch {
-      toast("انتخاب عکس انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "انتخاب عکس انجام نشد."), "error");
     }
   };
   const save = async () => {
@@ -1087,8 +1262,8 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
       }
       onSaved(saved);
       toast(client ? "پرونده ذخیره شد." : "مراجع جدید ثبت شد.");
-    } catch {
-      toast("ذخیره انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "ذخیره انجام نشد."), "error");
     }
   };
 
@@ -1113,8 +1288,8 @@ function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null;
       await invoke<Client>("save_client", { client: updatedClient });
       setRecordForm({ record_date: todayIsoDate(), weight_kg: record.weight_kg, height_cm: record.height_cm, notes: "" });
       toast("رکورد ویزیت ثبت شد.");
-    } catch {
-      toast("ثبت رکورد انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "ثبت رکورد انجام نشد."), "error");
     }
   };
 
@@ -1283,8 +1458,8 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
       const saved = isDesktopRuntime() ? await invoke<Settings>("save_settings", { settings: form }) : form;
       setSettings(saved);
       toast("تنظیمات ذخیره شد.");
-    } catch {
-      toast("ذخیره تنظیمات انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "ذخیره تنظیمات انجام نشد."), "error");
     }
   };
   const changeCredentials = async () => {
@@ -1297,16 +1472,16 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
       setSettings({ ...settings, username: credentials.username });
       setCredentials({ current_password: "", username: credentials.username, password: "", repeat: "" });
       toast("اطلاعات ورود تغییر کرد.");
-    } catch {
-      toast("رمز فعلی درست نیست یا تغییر انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "رمز فعلی درست نیست یا تغییر انجام نشد."), "error");
     }
   };
   const exportData = async () => {
     try {
       const path = await invoke<string>("export_data_backup");
       toast(`فایل سبک ذخیره شد: ${path}`);
-    } catch {
-      toast("ساخت فایل پشتیبان انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "ساخت فایل پشتیبان انجام نشد."), "error");
     }
   };
   const restoreData = async () => {
@@ -1317,16 +1492,16 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
       const restored = await invoke<Settings>("get_settings");
       setSettings(restored);
       toast("اطلاعات قبلی بازیابی شد.");
-    } catch {
-      toast("بازیابی انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "بازیابی انجام نشد."), "error");
     }
   };
   const exportSqlite = async () => {
     try {
       const path = await invoke<string>("export_database");
       toast(`کپی SQLite ذخیره شد: ${path}`);
-    } catch {
-      toast("خروجی SQLite انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "خروجی SQLite انجام نشد."), "error");
     }
   };
   const chooseBrandImage = async (kind: "logo" | "background") => {
@@ -1345,8 +1520,8 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
           : { ...current, background_image_path: imported },
       );
       toast(kind === "logo" ? "لوگو انتخاب شد. ذخیره را بزنید." : "عکس پس‌زمینه انتخاب شد. ذخیره را بزنید.");
-    } catch {
-      toast("انتخاب تصویر انجام نشد.", "error");
+    } catch (error) {
+      toast(getErrorMessage(error, "انتخاب تصویر انجام نشد."), "error");
     }
   };
   const applyDietoyTheme = () => {
