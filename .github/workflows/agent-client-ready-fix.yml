@@ -52,8 +52,9 @@ jobs:
               Ok(items)
           '@
           $content = $content.Replace($oldServices.Trim(), $newServices.Trim()).Replace($oldAttachments.Trim(), $newAttachments.Trim())
+          if ($content -notmatch 'let items = stmt\s*\.query_map\(params!\[visit_id\], row_to_visit_service\)') { throw 'Visit service lifetime fix was not applied.' }
+          if ($content -notmatch 'let items = stmt\s*\.query_map\(params!\[client_id\], row_to_attachment\)') { throw 'Attachment lifetime fix was not applied.' }
           [IO.File]::WriteAllText($path, $content, [Text.UTF8Encoding]::new($false))
-          if ((Get-FileHash $path -Algorithm SHA256).Hash.ToLower() -ne '56bf890ad9632b7c3c21cecd6079e3543b2e8649b803a526b9eaf86261b9afff') { throw 'Rust lifetime patch verification failed.' }
           Remove-Item '.github/workflows/agent-client-ready-fix.yml' -Force
 
       - name: Commit compile fix
