@@ -58,7 +58,6 @@ jobs:
             throw "NSIS setup EXE was not found."
           }
           Copy-Item $setup.FullName (Join-Path $releaseDir "Dietoy-FINAL-0.3.0-Setup.exe") -Force
-          Copy-Item $setup.FullName (Join-Path $releaseDir "Dietoy-Setup.exe") -Force
           Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
           Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
           Copy-Item "installer\README-USB.txt" $releaseDir -Force
