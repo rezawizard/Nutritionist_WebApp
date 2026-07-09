@@ -130,6 +130,8 @@ struct VisitService {
     #[serde(default)]
     service_id: Option<i64>,
     service_name_snapshot: String,
+    #[serde(default = "default_service_group")]
+    service_group_snapshot: String,
     #[serde(default)]
     body_area: String,
     #[serde(default)]
@@ -170,6 +172,8 @@ struct Attachment {
 #[derive(Debug, Serialize, Deserialize)]
 struct ServiceCatalogItem {
     id: Option<i64>,
+    #[serde(default = "default_service_group")]
+    group_key: String,
     name: String,
     #[serde(default)]
     default_price: f64,
@@ -179,10 +183,16 @@ struct ServiceCatalogItem {
     body_area_required: bool,
     #[serde(default = "default_active_service")]
     active: bool,
+    #[serde(default)]
+    description: String,
 }
 
 fn default_active_service() -> bool {
     true
+}
+
+fn default_service_group() -> String {
+    "other".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -513,6 +523,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             visit_id INTEGER NOT NULL,
             service_id INTEGER,
             service_name_snapshot TEXT NOT NULL,
+            service_group_snapshot TEXT NOT NULL DEFAULT 'other',
             body_area TEXT NOT NULL DEFAULT '',
             device_name TEXT NOT NULL DEFAULT '',
             duration_minutes INTEGER,
@@ -540,29 +551,39 @@ fn init_db(conn: &Connection) -> Result<(), String> {
 
         CREATE TABLE IF NOT EXISTS service_catalog (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_key TEXT NOT NULL DEFAULT 'other',
             name TEXT NOT NULL,
             default_price REAL NOT NULL DEFAULT 0,
             default_duration_minutes INTEGER,
             body_area_required INTEGER NOT NULL DEFAULT 0,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 1,
+            description TEXT NOT NULL DEFAULT ''
         );
         ",
     )
     .map_err(|err| err.to_string())?;
+
+    ensure_column(conn, "service_catalog", "group_key", "group_key TEXT NOT NULL DEFAULT 'other'")?;
+    ensure_column(conn, "service_catalog", "description", "description TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(conn, "visit_services", "service_group_snapshot", "service_group_snapshot TEXT NOT NULL DEFAULT 'other'")?;
+    ensure_column(conn, "visits", "visit_type", "visit_type TEXT NOT NULL DEFAULT 'initial'")?;
 
     let service_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM service_catalog", [], |row| row.get(0))
         .map_err(|err| err.to_string())?;
     if service_count == 0 {
         let default_services = [
-            ("ویزیت تغذیه", 0.0, Some(30_i64), 0_i64),
-            ("آنالیز بدن", 0.0, Some(20_i64), 0_i64),
-            ("تنظیم برنامه غذایی", 0.0, Some(45_i64), 0_i64),
+            ("diet", "برنامه غذایی کاهش وزن", 0.0, Some(45_i64), 0_i64),
+            ("diet", "تنظیم برنامه غذایی", 0.0, Some(45_i64), 0_i64),
+            ("body_analysis", "بادی آنالیز", 0.0, Some(20_i64), 0_i64),
+            ("device", "جلسه دستگاه", 0.0, Some(30_i64), 1_i64),
+            ("consultation", "مشاوره تغذیه", 0.0, Some(30_i64), 0_i64),
+            ("followup", "ویزیت پیگیری", 0.0, Some(20_i64), 0_i64),
         ];
-        for (name, price, duration, body_area_required) in default_services {
+        for (group_key, name, price, duration, body_area_required) in default_services {
             conn.execute(
-                "INSERT INTO service_catalog (name, default_price, default_duration_minutes, body_area_required, active) VALUES (?1, ?2, ?3, ?4, 1)",
-                params![name, price, duration, body_area_required],
+                "INSERT INTO service_catalog (group_key, name, default_price, default_duration_minutes, body_area_required, active, description) VALUES (?1, ?2, ?3, ?4, ?5, 1, '')",
+                params![group_key, name, price, duration, body_area_required],
             )
             .map_err(|err| err.to_string())?;
         }
@@ -1049,11 +1070,13 @@ fn save_visit_measurements(state: tauri::State<'_, AppState>, measurements: Visi
 fn row_to_service_catalog_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServiceCatalogItem> {
     Ok(ServiceCatalogItem {
         id: row.get(0)?,
-        name: row.get(1)?,
-        default_price: row.get(2)?,
-        default_duration_minutes: row.get(3)?,
-        body_area_required: row.get::<_, i64>(4)? == 1,
-        active: row.get::<_, i64>(5)? == 1,
+        group_key: row.get(1)?,
+        name: row.get(2)?,
+        default_price: row.get(3)?,
+        default_duration_minutes: row.get(4)?,
+        body_area_required: row.get::<_, i64>(5)? == 1,
+        active: row.get::<_, i64>(6)? == 1,
+        description: row.get(7)?,
     })
 }
 
@@ -1061,9 +1084,9 @@ fn row_to_service_catalog_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Serv
 fn list_service_catalog(state: tauri::State<'_, AppState>, active_only: bool) -> Result<Vec<ServiceCatalogItem>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let sql = if active_only {
-        "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE active = 1 ORDER BY name ASC, id ASC"
+        "SELECT id, group_key, name, default_price, default_duration_minutes, body_area_required, active, description FROM service_catalog WHERE active = 1 ORDER BY group_key ASC, name ASC, id ASC"
     } else {
-        "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog ORDER BY active DESC, name ASC, id ASC"
+        "SELECT id, group_key, name, default_price, default_duration_minutes, body_area_required, active, description FROM service_catalog ORDER BY active DESC, group_key ASC, name ASC, id ASC"
     };
     let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
     let items = stmt
@@ -1096,13 +1119,15 @@ fn save_service_catalog_item(
     let id = if let Some(id) = item.id {
         let affected = conn
             .execute(
-                "UPDATE service_catalog SET name=?1, default_price=?2, default_duration_minutes=?3, body_area_required=?4, active=?5 WHERE id=?6",
+                "UPDATE service_catalog SET group_key=?1, name=?2, default_price=?3, default_duration_minutes=?4, body_area_required=?5, active=?6, description=?7 WHERE id=?8",
                 params![
+                    item.group_key,
                     name,
                     item.default_price,
                     item.default_duration_minutes,
                     if item.body_area_required { 1 } else { 0 },
                     if item.active { 1 } else { 0 },
+                    item.description,
                     id
                 ],
             )
@@ -1113,13 +1138,15 @@ fn save_service_catalog_item(
         id
     } else {
         conn.execute(
-            "INSERT INTO service_catalog (name, default_price, default_duration_minutes, body_area_required, active) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO service_catalog (group_key, name, default_price, default_duration_minutes, body_area_required, active, description) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
+                item.group_key,
                 name,
                 item.default_price,
                 item.default_duration_minutes,
                 if item.body_area_required { 1 } else { 0 },
-                if item.active { 1 } else { 0 }
+                if item.active { 1 } else { 0 },
+                item.description
             ],
         )
         .map_err(|err| err.to_string())?;
@@ -1127,7 +1154,7 @@ fn save_service_catalog_item(
     };
 
     conn.query_row(
-        "SELECT id, name, default_price, default_duration_minutes, body_area_required, active FROM service_catalog WHERE id=?1",
+        "SELECT id, group_key, name, default_price, default_duration_minutes, body_area_required, active, description FROM service_catalog WHERE id=?1",
         params![id],
         row_to_service_catalog_item,
     )
@@ -1140,13 +1167,14 @@ fn row_to_visit_service(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitServic
         visit_id: row.get(1)?,
         service_id: row.get(2)?,
         service_name_snapshot: row.get(3)?,
-        body_area: row.get(4)?,
-        device_name: row.get(5)?,
-        duration_minutes: row.get(6)?,
-        price: row.get(7)?,
-        quantity: row.get(8)?,
-        total: row.get(9)?,
-        notes: row.get(10)?,
+        service_group_snapshot: row.get(4)?,
+        body_area: row.get(5)?,
+        device_name: row.get(6)?,
+        duration_minutes: row.get(7)?,
+        price: row.get(8)?,
+        quantity: row.get(9)?,
+        total: row.get(10)?,
+        notes: row.get(11)?,
     })
 }
 
@@ -1160,20 +1188,20 @@ fn save_visit_service(state: tauri::State<'_, AppState>, service: VisitService) 
     let total = if service.total > 0.0 { service.total } else { service.price * service.quantity.max(1.0) };
     let id = if let Some(id) = service.id {
         conn.execute(
-            "UPDATE visit_services SET service_id=?1, service_name_snapshot=?2, body_area=?3, device_name=?4, duration_minutes=?5, price=?6, quantity=?7, total=?8, notes=?9 WHERE id=?10",
-            params![service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity, total, service.notes, id],
+            "UPDATE visit_services SET service_id=?1, service_name_snapshot=?2, service_group_snapshot=?3, body_area=?4, device_name=?5, duration_minutes=?6, price=?7, quantity=?8, total=?9, notes=?10 WHERE id=?11",
+            params![service.service_id, service.service_name_snapshot, service.service_group_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity, total, service.notes, id],
         )
         .map_err(|err| err.to_string())?;
         id
     } else {
         conn.execute(
-            "INSERT INTO visit_services (visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-            params![service.visit_id, service.service_id, service.service_name_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes],
+            "INSERT INTO visit_services (visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![service.visit_id, service.service_id, service.service_name_snapshot, service.service_group_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes],
         )
         .map_err(|err| err.to_string())?;
         conn.last_insert_rowid()
     };
-    conn.query_row("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE id=?1", params![id], row_to_visit_service)
+    conn.query_row("SELECT id, visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE id=?1", params![id], row_to_visit_service)
         .map_err(|err| err.to_string())
 }
 
@@ -1181,7 +1209,7 @@ fn save_visit_service(state: tauri::State<'_, AppState>, service: VisitService) 
 fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Result<Vec<VisitService>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
+        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
         .map_err(|err| err.to_string())?;
     let items = stmt
         .query_map(params![visit_id], row_to_visit_service)
@@ -1215,7 +1243,24 @@ fn client_folder(state: &AppState, client_id: i64) -> Result<PathBuf, String> {
         .join("clients")
         .join(format!("client-{client_id:06}"));
     fs::create_dir_all(&base).map_err(|err| format!("ساخت پوشه مراجعه‌کننده انجام نشد: {err}"))?;
+    for folder in ["profile", "visits", "body-analysis", "lab-results", "medical", "diet-plans", "device", "photos", "reports", "other"] {
+        let _ = fs::create_dir_all(base.join(folder));
+    }
     Ok(base)
+}
+
+fn attachment_folder_name(category: &str) -> &'static str {
+    match category {
+        "profile" => "profile",
+        "body_analysis" => "body-analysis",
+        "lab" => "lab-results",
+        "medical_report" => "medical",
+        "diet_plan" => "diet-plans",
+        "device" => "device",
+        "before_after" => "photos",
+        "report" => "reports",
+        _ => "other",
+    }
 }
 
 fn import_attachment_inner(
@@ -1237,7 +1282,7 @@ fn import_attachment_inner(
         .and_then(|value| value.to_str())
         .ok_or_else(|| "نام فایل معتبر نیست.".to_string())?
         .to_string();
-    let target_dir = client_folder(state, attachment.client_id)?.join("attachments");
+    let target_dir = client_folder(state, attachment.client_id)?.join(attachment_folder_name(&attachment.category));
     fs::create_dir_all(&target_dir).map_err(|err| err.to_string())?;
 
     let mut target = target_dir.join(&file_name);
@@ -1500,7 +1545,7 @@ fn report_calculations(conn: &Connection, client: &Client) -> Result<(f64, f64, 
 
 fn list_visit_services_inner(conn: &Connection, visit_id: i64) -> Result<Vec<VisitService>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
+        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
         .map_err(|err| err.to_string())?;
     let items = stmt
         .query_map(params![visit_id], row_to_visit_service)
