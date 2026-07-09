@@ -137,6 +137,35 @@ const calculationSettingsFields: Array<{ key: CalcSettingKey; label: string; ste
   { key: "macro_fat_percent", label: "درصد چربی", step: 1 },
 ];
 
+const calculationSettingGroups: Array<{ title: string; description: string; fields: Array<{ key: CalcSettingKey; label: string; step?: number }> }> = [
+  {
+    title: "وزن مرجع و انرژی پایه",
+    description: "هسته محاسبه IBW، ABW و BMR. فقط در صورت تغییر پروتکل کلینیک اصلاح شود.",
+    fields: calculationSettingsFields.slice(0, 6),
+  },
+  {
+    title: "ضرایب فعالیت",
+    description: "به‌صورت پیش‌فرض همه سطح‌ها روی ۱.۳ هستند تا محاسبات ساده و قابل کنترل بماند.",
+    fields: calculationSettingsFields.slice(6, 11),
+  },
+  {
+    title: "هدف کالری و ماکروها",
+    description: "کسری/مازاد کالری و درصدهای ماکرو که در نتیجه نهایی دیده می‌شوند.",
+    fields: calculationSettingsFields.slice(11),
+  },
+];
+
+function metricDisplay(value?: number) {
+  if (value === undefined) return { text: "", isZero: false };
+  return { text: value === 0 ? "صفر" : formatNumber(value), isZero: value === 0 };
+}
+
+function currencyDisplay(value?: number) {
+  if (value === undefined) return { text: "", isZero: false };
+  const rounded = Math.round(value);
+  return { text: rounded === 0 ? "بدون درآمد" : formatNumber(rounded), isZero: rounded === 0 };
+}
+
 function isDesktopRuntime() {
   return Boolean((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
 }
@@ -380,9 +409,9 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
             </div>
           </div>
           <form onSubmit={submit} className="p-7 md:p-9">
-            <p className="text-sm font-semibold text-olive">آیدا جان</p>
-            <h2 className="mt-3 text-3xl font-bold">خوش آمدید</h2>
-            <p className="mt-3 text-sm leading-7 text-warm-500">برای دسترسی به اطلاعات مراجعین وارد شوید.</p>
+            <p className="text-sm font-semibold text-olive">{settings.dietitian_name ? `${settings.dietitian_name} عزیز` : "ورود امن"}</p>
+            <h2 className="mt-3 text-3xl font-extrabold text-charcoal">خوش آمدید</h2>
+            <p className="mt-3 text-sm leading-7 text-warm-500">برای دسترسی به اطلاعات مراجعین وارد شوید. اطلاعات روی همین دستگاه ذخیره می‌شود.</p>
             <div className="mt-8 grid gap-5">
               <IconInput icon={UserRound} label="نام کاربری" value={username} onChange={setUsername} autoComplete="username" />
               <IconInput icon={KeyRound} label="رمز عبور" type="password" value={password} onChange={setPassword} autoComplete="current-password" />
@@ -409,6 +438,7 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
 
   const goalTotal = goalKeys.reduce((sum, goal) => sum + (stats?.goal_counts[goal] ?? 0), 0);
   const maxGoalCount = Math.max(1, ...goalKeys.map((goal) => stats?.goal_counts[goal] ?? 0));
+  const dashboardIsEmpty = Boolean(stats && stats.total_clients === 0 && stats.visits_this_month === 0 && stats.revenue_this_month === 0);
 
   return (
     <>
@@ -418,39 +448,52 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
         action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>}
       />
 
-      <section className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="card p-6 md:p-8">
-          <div className="flex items-start justify-between gap-4">
+      {dashboardIsEmpty && (
+        <section className="mb-5 rounded-[28px] border border-white/30 bg-white/95 p-5 shadow-soft backdrop-blur md:p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-card bg-emerald/10 text-[var(--primary)]"><CheckCircle2 size={24} /></div>
+              <div>
+                <p className="text-sm font-bold text-olive">شروع تمیز</p>
+                <h2 className="mt-1 text-xl font-bold">هنوز داده‌ای ثبت نشده؛ اپ آماده ساخت اولین پرونده است.</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-7 text-warm-500">از «ثبت مراجع» شروع کنید. بعد از اولین ویزیت، داشبورد به‌صورت خودکار پیگیری‌ها، درآمد خدمات و روند کار را نشان می‌دهد.</p>
+              </div>
+            </div>
+            <PrimaryButton icon={Plus} onClick={onNew}>اولین مراجع را ثبت کنید</PrimaryButton>
+          </div>
+        </section>
+      )}
+
+      <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
+        <div className="card relative overflow-hidden p-6 md:p-8">
+          <div className="pointer-events-none absolute -left-12 -top-12 h-40 w-40 rounded-full bg-emerald/5" />
+          <div className="relative flex items-start justify-between gap-4">
             <div>
               <p className="text-sm font-semibold text-olive">اقدام سریع</p>
               <h2 className="mt-3 text-2xl font-bold">شروع ویزیت بدون شلوغی</h2>
-              <p className="mt-3 max-w-xl text-sm leading-7 text-warm-500">برای ثبت پرونده تازه، محاسبه سریع انرژی، یا بررسی مراجعین نیازمند پیگیری از همین‌جا شروع کنید.</p>
+              <p className="mt-3 max-w-xl text-sm leading-7 text-warm-500">سه کار پرتکرار همین‌جاست: ثبت پرونده، محاسبه سریع و بررسی پیگیری‌ها. بدون رفت‌وبرگشت اضافی.</p>
             </div>
             <Sparkles className="text-sage" size={28} />
           </div>
-          <div className="mt-8 grid gap-3 sm:grid-cols-2">
+          <div className="relative mt-8 grid gap-3 sm:grid-cols-2">
             <PrimaryButton icon={Plus} onClick={onNew}>ثبت مراجع</PrimaryButton>
             <SecondaryButton icon={Calculator} onClick={onCalculator}>محاسبات تغذیه</SecondaryButton>
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <Stat label="همه مراجعین" value={stats?.total_clients} icon={Users} />
-          <Stat label="فعال" value={stats?.active_clients} icon={Leaf} />
-          <Stat label="ویزیت امروز" value={stats?.visits_today} icon={CalendarCheck} />
-          <Stat label="پیگیری آینده" value={stats?.upcoming_followups} icon={Clock3} />
+          <Stat label="همه مراجعین" value={stats?.total_clients} icon={Users} hint="پرونده ثبت‌شده" />
+          <Stat label="فعال" value={stats?.active_clients} icon={Leaf} hint="مراجع در جریان" />
+          <Stat label="ویزیت امروز" value={stats?.visits_today} icon={CalendarCheck} hint="قرار امروز" />
+          <Stat label="پیگیری آینده" value={stats?.upcoming_followups} icon={Clock3} hint="نیازمند پیگیری" />
         </div>
       </section>
 
       <section className="mt-5 grid gap-5 xl:grid-cols-4">
-        <Stat label="ویزیت ۷ روز آینده" value={stats?.visits_next_7_days} icon={CalendarDays} />
-        <Stat label="ویزیت این ماه" value={stats?.visits_this_month} icon={ClipboardList} />
-        <Stat label="مراجع بایگانی" value={stats?.archived_clients} icon={Archive} />
-        <div className="card p-5">
-          <div className="mb-7 flex items-center justify-between text-warm-500"><span className="text-sm">درآمد خدمات این ماه</span><BadgeDollarSign size={21} /></div>
-          {stats === null ? <div className="h-10 w-28 animate-pulse rounded-control bg-warm-100" /> : <p className="numbers text-3xl font-bold text-charcoal">{formatNumber(Math.round(stats.revenue_this_month))}</p>}
-          <p className="mt-2 text-xs text-warm-500">تومان</p>
-        </div>
+        <Stat label="ویزیت ۷ روز آینده" value={stats?.visits_next_7_days} icon={CalendarDays} hint="برنامه نزدیک" />
+        <Stat label="ویزیت این ماه" value={stats?.visits_this_month} icon={ClipboardList} hint="فعالیت ماه" />
+        <Stat label="مراجع بایگانی" value={stats?.archived_clients} icon={Archive} hint="خارج از جریان" />
+        <RevenueStat value={stats?.revenue_this_month} />
       </section>
 
       <section className="mt-5 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
@@ -1593,19 +1636,35 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
               <p className="helper mt-3">برای لوگوی پیش‌فرض نسخه نصبی، فایل لوگو را با نام logo.png داخل پوشه public پروژه بگذارید.</p>
             </div>
             <div className="md:col-span-2 rounded-card border border-warm-100 bg-warm-50 p-5">
-              <div className="flex items-center gap-2">
-                <Calculator size={21} className="text-sage" />
-                <h2 className="text-lg font-bold">تنظیمات محاسبات</h2>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Calculator size={21} className="text-sage" />
+                    <h2 className="text-lg font-bold">تنظیمات محاسبات</h2>
+                  </div>
+                  <p className="helper mt-2">این بخش روی محاسبات بعدی اثر دارد. برای نسخه مشتری، مقدارهای پیش‌فرض فعلی مناسب و ساده‌اند.</p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-olive">پروتکل تغذیه</span>
               </div>
-              <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {calculationSettingsFields.map((field) => (
-                  <SettingNumberField
-                    key={field.key}
-                    label={field.label}
-                    value={Number(form[field.key] ?? defaultCalculationSettings[field.key])}
-                    step={field.step}
-                    onChange={(value) => setCalcSetting(field.key, value)}
-                  />
+              <div className="mt-5 grid gap-4">
+                {calculationSettingGroups.map((group) => (
+                  <div key={group.title} className="rounded-card border border-warm-100 bg-white p-4">
+                    <div className="mb-4">
+                      <p className="text-sm font-bold text-charcoal">{group.title}</p>
+                      <p className="helper mt-1">{group.description}</p>
+                    </div>
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {group.fields.map((field) => (
+                        <SettingNumberField
+                          key={field.key}
+                          label={field.label}
+                          value={Number(form[field.key] ?? defaultCalculationSettings[field.key])}
+                          step={field.step}
+                          onChange={(value) => setCalcSetting(field.key, value)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
@@ -1680,8 +1739,40 @@ function SecondaryButton({ children, onClick, icon: Icon }: { children: React.Re
   return <button onClick={onClick} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control border border-warm-100 bg-paper px-5 text-sm font-semibold text-charcoal hover:bg-warm-50">{Icon && <Icon size={19} />}{children}</button>;
 }
 
-function Stat({ label, value, icon: Icon }: { label: string; value?: number; icon: typeof Users }) {
-  return <div className="card p-5"><div className="mb-7 flex items-center justify-between text-warm-500"><span className="text-sm">{label}</span><Icon size={21} /></div>{value === undefined ? <div className="h-10 w-20 animate-pulse rounded-control bg-warm-100" /> : <p className="numbers text-4xl font-bold text-charcoal">{formatNumber(value)}</p>}</div>;
+function Stat({ label, value, icon: Icon, hint }: { label: string; value?: number; icon: typeof Users; hint?: string }) {
+  const display = metricDisplay(value);
+  return (
+    <div className={cn("metric-card card p-5", display.isZero && "metric-card-empty")}>
+      <div className="mb-5 flex items-center justify-between gap-3 text-warm-500">
+        <span className="text-sm font-semibold">{label}</span>
+        <span className="grid h-9 w-9 place-items-center rounded-control bg-warm-50 text-olive"><Icon size={20} /></span>
+      </div>
+      {value === undefined ? (
+        <div className="h-11 w-24 animate-pulse rounded-control bg-warm-100" />
+      ) : (
+        <p className={cn("metric-value text-charcoal", display.isZero && "metric-value-empty")}>{display.text}</p>
+      )}
+      <p className="mt-3 text-xs leading-6 text-warm-500">{display.isZero ? "هنوز موردی ثبت نشده" : hint}</p>
+    </div>
+  );
+}
+
+function RevenueStat({ value }: { value?: number }) {
+  const display = currencyDisplay(value);
+  return (
+    <div className={cn("metric-card card p-5", display.isZero && "metric-card-empty")}>
+      <div className="mb-5 flex items-center justify-between gap-3 text-warm-500">
+        <span className="text-sm font-semibold">درآمد خدمات این ماه</span>
+        <span className="grid h-9 w-9 place-items-center rounded-control bg-warm-50 text-olive"><BadgeDollarSign size={20} /></span>
+      </div>
+      {value === undefined ? (
+        <div className="h-11 w-28 animate-pulse rounded-control bg-warm-100" />
+      ) : (
+        <p className={cn("metric-value text-charcoal", display.isZero && "metric-value-empty")}>{display.text}</p>
+      )}
+      <p className="mt-3 text-xs leading-6 text-warm-500">{display.isZero ? "بعد از ثبت خدمات ویزیت نمایش داده می‌شود" : "تومان"}</p>
+    </div>
+  );
 }
 
 function ProfileAvatar({ client, size = "md" }: { client: Client; size?: "md" | "lg" }) {
@@ -1736,7 +1827,19 @@ function ClientRow({ client, onEdit, onCalculate, onArchive }: { client: Client;
 }
 
 function ResultCard({ title, value, unit, text, featured = false }: { title: string; value: string; unit: string; text: string; featured?: boolean }) {
-  return <div className={cn("card p-5", featured && "border-[var(--primary)] bg-[#fffef9]")}><p className="text-sm font-semibold text-warm-500">{title}</p><div className="mt-5 flex items-end gap-2"><p className="numbers text-4xl font-bold text-charcoal">{value}</p><p className="pb-1 text-sm text-olive">{unit}</p></div><p className="mt-4 text-xs leading-6 text-warm-500">{text}</p></div>;
+  return (
+    <div className={cn("result-card card p-5", featured && "result-card-featured border-[var(--primary)] bg-[#fffef9]")}>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm font-bold text-warm-500">{title}</p>
+        {featured && <span className="rounded-full bg-emerald/10 px-3 py-1 text-[11px] font-bold text-[var(--primary)]">اصلی</span>}
+      </div>
+      <div className="mt-5 flex flex-wrap items-end gap-x-3 gap-y-1">
+        <p className="numbers max-w-full break-words text-4xl font-extrabold leading-none text-charcoal">{value}</p>
+        <p className="pb-1 text-sm font-semibold text-olive">{unit}</p>
+      </div>
+      <p className="mt-4 min-h-10 text-xs leading-6 text-warm-500">{text}</p>
+    </div>
+  );
 }
 
 function TextField({ label, value, onChange, placeholder, error }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string; error?: string }) {
@@ -1748,11 +1851,11 @@ function PasswordField({ label, value, onChange }: { label: string; value: strin
 }
 
 function IconInput({ icon: Icon, label, value, onChange, type = "text", autoComplete }: { icon: typeof UserRound; label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string }) {
-  return <div><label className="label">{label}</label><div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-4 focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10"><Icon size={19} className="text-warm-500" /><input className="min-w-0 flex-1 border-0 bg-transparent outline-none" type={type} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} /></div></div>;
+  return <div><label className="label">{label}</label><div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white/95 px-4 shadow-sm focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10"><Icon size={19} className="text-olive" /><input className="min-w-0 flex-1 border-0 bg-transparent text-charcoal outline-none placeholder:text-warm-400" type={type} value={value} onChange={(event) => onChange(event.target.value)} autoComplete={autoComplete} /></div></div>;
 }
 
 function NumberField({ label, value, onChange, suffix, error }: { label: string; value: number; onChange: (value: number) => void; suffix: string; error?: string }) {
-  return <div><label className="label">{label}</label><div className={cn("mt-2 flex h-12 items-center rounded-control border border-warm-200 bg-white px-4 focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10", error && "border-red-300 focus-within:border-red-400 focus-within:ring-red-100")}><input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left outline-none" type="number" min="0" value={value} onChange={(event) => onChange(Number(event.target.value))} /><span className="text-xs text-warm-500">{suffix}</span></div><FieldError text={error} /></div>;
+  return <div><label className="label">{label}</label><div className={cn("input-with-unit mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-4 focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10", error && "border-red-300 focus-within:border-red-400 focus-within:ring-red-100")}><input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left text-charcoal outline-none" type="number" min="0" dir="ltr" value={value} onChange={(event) => onChange(Number(event.target.value))} /><span className="shrink-0 whitespace-nowrap text-xs font-semibold text-warm-500">{suffix}</span></div><FieldError text={error} /></div>;
 }
 
 function SettingNumberField({ label, value, onChange, step = 1 }: { label: string; value: number; onChange: (value: number) => void; step?: number }) {
@@ -1886,7 +1989,13 @@ function SelectField({ label, value, onChange, options }: { label: string; value
 }
 
 function EmptyState({ icon: Icon, title, text }: { icon: typeof Search; title: string; text: string }) {
-  return <div className="grid place-items-center py-8 text-center"><div className="grid h-14 w-14 place-items-center rounded-card bg-warm-50 text-sage"><Icon size={25} /></div><h3 className="mt-4 text-lg font-bold">{title}</h3><p className="mt-2 text-sm text-warm-500">{text}</p></div>;
+  return (
+    <div className="empty-state grid place-items-center rounded-card border border-dashed border-warm-200 bg-warm-50/80 p-8 text-center">
+      <div className="grid h-14 w-14 place-items-center rounded-card bg-white text-sage shadow-sm"><Icon size={28} /></div>
+      <h3 className="mt-4 text-lg font-bold text-charcoal">{title}</h3>
+      <p className="mt-2 max-w-md text-sm leading-7 text-warm-500">{text}</p>
+    </div>
+  );
 }
 
 function SkeletonRows() {
