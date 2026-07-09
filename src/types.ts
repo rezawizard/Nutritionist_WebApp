@@ -1,8 +1,12 @@
 export type Gender = "female" | "male";
 export type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "very_active";
 export type Goal = "lose" | "maintain" | "gain";
-export type VisitStatus = "tentative" | "confirmed" | "done" | "cancelled" | "completed" | "scheduled";
-export type AttachmentCategory = "body_analysis" | "lab" | "medical_report" | "other";
+export type VisitStatus = "tentative" | "confirmed" | "done" | "cancelled" | "completed" | "scheduled" | "canceled" | "pending";
+export type VisitType = "initial" | "diet_followup" | "body_analysis" | "device" | "consultation" | "combined";
+export type ServiceGroup = "diet" | "consultation" | "body_analysis" | "device" | "followup" | "package" | "report" | "other";
+export type AttachmentCategory = "profile" | "body_analysis" | "lab" | "medical_report" | "diet_plan" | "device" | "before_after" | "report" | "other";
+export type CareTrackType = "diet" | "body_analysis" | "device" | "consultation" | "combined";
+export type CareTrackStatus = "active" | "paused" | "completed";
 
 export interface Client {
   id?: number;
@@ -22,6 +26,20 @@ export interface Client {
   updated_at?: string;
 }
 
+export interface CareTrack {
+  id?: number;
+  client_id: number;
+  track_type: CareTrackType;
+  goal: Goal;
+  title: string;
+  start_date: string;
+  status: CareTrackStatus;
+  target_weight?: number | null;
+  notes: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ClientRecord {
   id?: number;
   client_id: number;
@@ -36,6 +54,8 @@ export interface ClientRecord {
 export interface Visit {
   id?: number;
   client_id: number;
+  track_id?: number | null;
+  visit_type?: VisitType;
   visit_date: string;
   visit_time: string;
   status: string;
@@ -84,6 +104,7 @@ export interface VisitService {
   visit_id: number;
   service_id?: number | null;
   service_name_snapshot: string;
+  service_group_snapshot?: ServiceGroup | string;
   body_area: string;
   device_name: string;
   duration_minutes?: number | null;
@@ -97,6 +118,9 @@ export interface Attachment {
   id?: number;
   client_id: number;
   visit_id?: number | null;
+  track_id?: number | null;
+  related_type?: string;
+  related_id?: number | null;
   category: AttachmentCategory | string;
   title: string;
   file_name: string;
@@ -108,11 +132,13 @@ export interface Attachment {
 
 export interface ServiceCatalogItem {
   id?: number;
+  group_key?: ServiceGroup | string;
   name: string;
   default_price: number;
   default_duration_minutes?: number | null;
   body_area_required: boolean;
   active: boolean;
+  description?: string;
 }
 
 export interface Settings {
@@ -151,6 +177,7 @@ export interface DashboardVisitSummary {
   visit_time: string;
   status: string;
   total_fee: number;
+  visit_type?: VisitType | string;
 }
 
 export interface DashboardStats {

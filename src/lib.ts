@@ -1,6 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { ActivityLevel, Client, Gender, Goal, Settings } from "./types";
+import type { ActivityLevel, AttachmentCategory, CareTrackType, Client, Gender, Goal, ServiceGroup, Settings, VisitType } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -23,6 +23,46 @@ export const goalLabels: Record<Goal, string> = {
   lose: "کاهش وزن",
   maintain: "ثبات وزن",
   gain: "افزایش وزن",
+};
+
+export const visitTypeLabels: Record<VisitType, string> = {
+  initial: "ویزیت اولیه",
+  diet_followup: "پیگیری رژیم",
+  body_analysis: "بادی آنالیز",
+  device: "جلسه دستگاه",
+  consultation: "مشاوره",
+  combined: "ترکیبی",
+};
+
+export const careTrackLabels: Record<CareTrackType, string> = {
+  diet: "رژیم غذایی",
+  body_analysis: "بادی آنالیز",
+  device: "دستگاه",
+  consultation: "مشاوره",
+  combined: "ترکیبی",
+};
+
+export const serviceGroupLabels: Record<ServiceGroup, string> = {
+  diet: "رژیم غذایی",
+  consultation: "مشاوره تغذیه",
+  body_analysis: "بادی آنالیز",
+  device: "دستگاه و خدمات بدنی",
+  followup: "پیگیری و کنترل",
+  package: "پکیج‌ها",
+  report: "گزارش و فایل",
+  other: "سایر",
+};
+
+export const attachmentCategoryLabels: Record<AttachmentCategory, string> = {
+  profile: "عکس پروفایل",
+  body_analysis: "بادی آنالیز",
+  lab: "آزمایش",
+  medical_report: "پزشکی",
+  diet_plan: "رژیم",
+  device: "دستگاه",
+  before_after: "قبل/بعد",
+  report: "گزارش",
+  other: "سایر",
 };
 
 export const defaultCalculationSettings = {
@@ -293,6 +333,31 @@ export function daysInJalaliMonth(year: number, month: number) {
   if (month <= 6) return 31;
   if (month <= 11) return 30;
   return jalaliCalendar(year).leap === 0 ? 30 : 29;
+}
+
+export function addDaysToIso(iso: string, days: number) {
+  const base = isValidIsoDate(iso) ? new Date(`${iso}T00:00:00`) : new Date();
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
+export function startOfMonthIso(iso: string) {
+  const base = isValidIsoDate(iso) ? new Date(`${iso}T00:00:00`) : new Date();
+  return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+export function endOfMonthIso(iso: string) {
+  const base = isValidIsoDate(iso) ? new Date(`${iso}T00:00:00`) : new Date();
+  return new Date(base.getFullYear(), base.getMonth() + 1, 0).toISOString().slice(0, 10);
+}
+
+export function safeFileSegment(value: string, fallback = "client") {
+  const normalized = normalizeDigits(value)
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized || fallback;
 }
 
 export function getErrorMessage(error: unknown, fallback: string) {

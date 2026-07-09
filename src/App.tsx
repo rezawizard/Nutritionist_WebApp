@@ -2,7 +2,6 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
-  BadgeDollarSign,
   Calculator,
   Camera,
   CalendarCheck,
@@ -52,11 +51,17 @@ import {
   daysInJalaliMonth,
   genderLabels,
   goalLabels,
+  visitTypeLabels,
+  serviceGroupLabels,
+  attachmentCategoryLabels,
+  addDaysToIso,
+  startOfMonthIso,
+  endOfMonthIso,
   isValidIsoDate,
   todayIsoDate,
   toPersianDigits,
 } from "./lib";
-import type { ActivityLevel, Attachment, Client, DashboardStats, Gender, Goal, Screen, ServiceCatalogItem, Settings, VisitDetail, VisitService } from "./types";
+import type { ActivityLevel, Attachment, AttachmentCategory, Client, DashboardStats, Gender, Goal, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitService, VisitType } from "./types";
 import type { ClientRecord } from "./types";
 
 const defaultSettings: Settings = {
@@ -81,7 +86,7 @@ const dietoyTheme = {
 type Toast = { id: number; text: string; kind?: "success" | "error" };
 type ToastFn = (text: string, kind?: Toast["kind"]) => void;
 type FieldErrors = Partial<Record<"full_name" | "age" | "height_cm" | "weight_kg" | "profile_image_path" | "visit_date" | "visit_time" | "next_visit_date" | "next_visit_time", string>>;
-type ProfileTab = "summary" | "visits" | "files" | "services" | "base";
+type ProfileTab = "summary" | "tracks" | "visits" | "measurements" | "nutrition" | "files" | "services" | "base";
 type ClientGoalFilter = "all" | Goal;
 type CalcSettingKey = keyof typeof defaultCalculationSettings;
 
@@ -116,6 +121,17 @@ const visitStatusLabels: Record<string, string> = {
 };
 
 const goalKeys: Goal[] = ["lose", "maintain", "gain"];
+const serviceGroupKeys: ServiceGroup[] = ["diet", "consultation", "body_analysis", "device", "followup", "package", "report", "other"];
+const attachmentCategoryKeys: AttachmentCategory[] = ["body_analysis", "lab", "medical_report", "diet_plan", "device", "before_after", "report", "other"];
+const visitTypeKeys: VisitType[] = ["initial", "diet_followup", "body_analysis", "device", "consultation", "combined"];
+
+const newClientStartOptions: Array<{ key: VisitType; title: string; description: string }> = [
+  { key: "initial", title: "شروع پرونده", description: "اطلاعات پایه، هدف و اولین اندازه‌گیری" },
+  { key: "diet_followup", title: "رژیم غذایی", description: "محاسبه انرژی، هدف کالری و پایش وزن" },
+  { key: "body_analysis", title: "بادی آنالیز", description: "ثبت ترکیب بدن، دورها و فایل دستگاه" },
+  { key: "device", title: "دستگاه", description: "جلسه دستگاه، ناحیه هدف و عکس‌های مرتبط" },
+  { key: "combined", title: "ترکیبی", description: "رژیم + بادی آنالیز + خدمات دیگر" },
+];
 
 const calculationSettingsFields: Array<{ key: CalcSettingKey; label: string; step?: number }> = [
   { key: "calc_ibw_bmi_factor", label: "ضریب BMI برای IBW", step: 0.1 },
@@ -158,12 +174,6 @@ const calculationSettingGroups: Array<{ title: string; description: string; fiel
 function metricDisplay(value?: number) {
   if (value === undefined) return { text: "", isZero: false };
   return { text: value === 0 ? "صفر" : formatNumber(value), isZero: value === 0 };
-}
-
-function currencyDisplay(value?: number) {
-  if (value === undefined) return { text: "", isZero: false };
-  const rounded = Math.round(value);
-  return { text: rounded === 0 ? "بدون درآمد" : formatNumber(rounded), isZero: rounded === 0 };
 }
 
 function isDesktopRuntime() {
@@ -427,6 +437,11 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
 
 function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version: number; settings: Settings; onNew: () => void; onCalculator: () => void; onEdit: (client: Client) => void }) {
   const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [calendarMode, setCalendarMode] = useState<"today" | "week" | "month" | "exact" | "range" | "all">("today");
+  const [exactDate, setExactDate] = useState(todayIsoDate());
+  const [rangeStart, setRangeStart] = useState(todayIsoDate());
+  const [rangeEnd, setRangeEnd] = useState(addDaysToIso(todayIsoDate(), 7));
+
   useEffect(() => {
     if (!isDesktopRuntime()) {
       setStats(emptyDashboardStats);
@@ -436,114 +451,103 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
     invoke<DashboardStats>("dashboard_stats").then(setStats).catch(() => setStats(emptyDashboardStats));
   }, [version]);
 
-  const goalTotal = goalKeys.reduce((sum, goal) => sum + (stats?.goal_counts[goal] ?? 0), 0);
-  const maxGoalCount = Math.max(1, ...goalKeys.map((goal) => stats?.goal_counts[goal] ?? 0));
-  const dashboardIsEmpty = Boolean(stats && stats.total_clients === 0 && stats.visits_this_month === 0 && stats.revenue_this_month === 0);
+  const calendarVisits = useMemo(() => {
+    const visits = [...(stats?.upcoming_visits ?? []), ...(stats?.recent_visits ?? [])];
+    const unique = new Map<string, DashboardStats["upcoming_visits"][number]>();
+    visits.forEach((visit) => unique.set(`${visit.id ?? visit.client_id}-${visit.visit_date}-${visit.visit_time}`, visit));
+    const items = Array.from(unique.values());
+    const today = todayIsoDate();
+    const inRange = (visit: DashboardStats["upcoming_visits"][number]) => {
+      if (calendarMode === "all") return true;
+      if (calendarMode === "today") return visit.visit_date === today;
+      if (calendarMode === "week") return visit.visit_date >= today && visit.visit_date <= addDaysToIso(today, 7);
+      if (calendarMode === "month") return visit.visit_date >= startOfMonthIso(today) && visit.visit_date <= endOfMonthIso(today);
+      if (calendarMode === "exact") return visit.visit_date === exactDate;
+      return visit.visit_date >= rangeStart && visit.visit_date <= rangeEnd;
+    };
+    return items.filter(inRange).sort((a, b) => `${a.visit_date} ${a.visit_time}`.localeCompare(`${b.visit_date} ${b.visit_time}`)).slice(0, 8);
+  }, [stats, calendarMode, exactDate, rangeStart, rangeEnd]);
+
+  const dashboardIsEmpty = Boolean(stats && stats.total_clients === 0 && stats.visits_today === 0 && stats.upcoming_followups === 0);
 
   return (
     <>
       <PageHeader
-        title={settings.dietitian_name ? `سلام، ${settings.dietitian_name}` : "روز آرامی برای مراقبت بهتر"}
-        subtitle={`امروز ${formatPersianDate()} است. پرونده مراجعین، پیگیری‌ها و گزارش‌های کاری شما روی همین دستگاه ذخیره می‌شود.`}
+        title="داشبورد روزانه"
+        subtitle={`امروز ${formatPersianDate()} است. این صفحه فقط کارهای عملیاتی روز را نشان می‌دهد؛ گزارش‌های مالی عمداً از داشبورد حذف شده‌اند.`}
         action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>}
       />
 
-      {dashboardIsEmpty && (
-        <section className="mb-5 rounded-[28px] border border-white/30 bg-white/95 p-5 shadow-soft backdrop-blur md:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex items-start gap-4">
-              <div className="grid h-12 w-12 shrink-0 place-items-center rounded-card bg-emerald/10 text-[var(--primary)]"><CheckCircle2 size={24} /></div>
-              <div>
-                <p className="text-sm font-bold text-olive">شروع تمیز</p>
-                <h2 className="mt-1 text-xl font-bold">هنوز داده‌ای ثبت نشده؛ اپ آماده ساخت اولین پرونده است.</h2>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-warm-500">از «ثبت مراجع» شروع کنید. بعد از اولین ویزیت، داشبورد به‌صورت خودکار پیگیری‌ها، درآمد خدمات و روند کار را نشان می‌دهد.</p>
-              </div>
-            </div>
-            <PrimaryButton icon={Plus} onClick={onNew}>اولین مراجع را ثبت کنید</PrimaryButton>
-          </div>
-        </section>
-      )}
-
-      <section className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
-        <div className="card relative overflow-hidden p-6 md:p-8">
-          <div className="pointer-events-none absolute -left-12 -top-12 h-40 w-40 rounded-full bg-emerald/5" />
-          <div className="relative flex items-start justify-between gap-4">
+      <section className="daily-dashboard-grid">
+        <div className="card daily-hero p-6 md:p-7">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <p className="text-sm font-semibold text-olive">اقدام سریع</p>
-              <h2 className="mt-3 text-2xl font-bold">شروع ویزیت بدون شلوغی</h2>
-              <p className="mt-3 max-w-xl text-sm leading-7 text-warm-500">سه کار پرتکرار همین‌جاست: ثبت پرونده، محاسبه سریع و بررسی پیگیری‌ها. بدون رفت‌وبرگشت اضافی.</p>
+              <span className="pill-soft">اقدام سریع</span>
+              <h2 className="mt-4 text-2xl font-extrabold">شروع ویزیت بدون شلوغی</h2>
+              <p className="mt-3 max-w-xl text-sm leading-8 text-warm-500">دو مسیر اصلی کار کلینیک همین‌جاست: مراجعه‌کننده جدید یا ویزیت برای مراجعه‌کننده قبلی. بقیه اطلاعات در پرونده تو‌در‌تو باز می‌شود.</p>
             </div>
-            <Sparkles className="text-sage" size={28} />
+            <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[420px]">
+              <PrimaryButton icon={Plus} onClick={onNew}>ثبت مراجع جدید</PrimaryButton>
+              <SecondaryButton icon={Search} onClick={() => document.getElementById("client-search-shortcut")?.focus()}>مراجع قبلی / ویزیت</SecondaryButton>
+              <SecondaryButton icon={Calculator} onClick={onCalculator}>محاسبات</SecondaryButton>
+              <SecondaryButton icon={CalendarDays} onClick={() => setCalendarMode("today")}>تقویم امروز</SecondaryButton>
+            </div>
           </div>
-          <div className="relative mt-8 grid gap-3 sm:grid-cols-2">
-            <PrimaryButton icon={Plus} onClick={onNew}>ثبت مراجع</PrimaryButton>
-            <SecondaryButton icon={Calculator} onClick={onCalculator}>محاسبات تغذیه</SecondaryButton>
-          </div>
+          {dashboardIsEmpty && (
+            <div className="mt-6 rounded-card border border-dashed border-warm-200 bg-white/70 p-4">
+              <p className="font-bold text-charcoal">هنوز اولین پرونده ساخته نشده است.</p>
+              <p className="mt-2 text-sm leading-7 text-warm-500">از «ثبت مراجع جدید» شروع کنید؛ بعد از اولین ویزیت، تقویم و پیگیری‌ها خودکار زنده می‌شوند.</p>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <Stat label="همه مراجعین" value={stats?.total_clients} icon={Users} hint="پرونده ثبت‌شده" />
-          <Stat label="فعال" value={stats?.active_clients} icon={Leaf} hint="مراجع در جریان" />
-          <Stat label="ویزیت امروز" value={stats?.visits_today} icon={CalendarCheck} hint="قرار امروز" />
-          <Stat label="پیگیری آینده" value={stats?.upcoming_followups} icon={Clock3} hint="نیازمند پیگیری" />
+          <Stat label="فعال" value={stats?.active_clients} icon={Leaf} hint="پرونده‌های در جریان" />
+          <Stat label="همه مراجعین" value={stats?.total_clients} icon={Users} hint="کل پرونده‌ها" />
         </div>
       </section>
 
-      <section className="mt-5 grid gap-5 xl:grid-cols-4">
-        <Stat label="ویزیت ۷ روز آینده" value={stats?.visits_next_7_days} icon={CalendarDays} hint="برنامه نزدیک" />
-        <Stat label="ویزیت این ماه" value={stats?.visits_this_month} icon={ClipboardList} hint="فعالیت ماه" />
-        <Stat label="مراجع بایگانی" value={stats?.archived_clients} icon={Archive} hint="خارج از جریان" />
-        <RevenueStat value={stats?.revenue_this_month} />
-      </section>
-
-      <section className="mt-5 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+      <section className="mt-5 grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="card p-6">
-          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">ترکیب هدف مراجعین فعال</h2><Target className="text-sage" size={22} /></div>
-          {!stats ? <SkeletonRows /> : goalTotal === 0 ? <EmptyState icon={Target} title="هنوز داده‌ای برای هدف‌ها نیست" text="بعد از ثبت مراجع، ترکیب کاهش، ثبات و افزایش وزن اینجا دیده می‌شود." /> : (
-            <div className="grid gap-4">
-              {goalKeys.map((goal) => {
-                const count = stats.goal_counts[goal] ?? 0;
-                const percent = goalTotal ? Math.round((count / goalTotal) * 100) : 0;
-                const width = Math.max(8, Math.round((count / maxGoalCount) * 100));
-                return (
-                  <div key={goal}>
-                    <div className="mb-2 flex items-center justify-between text-sm">
-                      <span className="font-semibold">{goalLabels[goal]}</span>
-                      <span className="numbers text-warm-500">{formatNumber(count)} نفر · {toPersianDigits(percent)}٪</span>
-                    </div>
-                    <div className="h-3 overflow-hidden rounded-full bg-warm-100">
-                      <div className="h-full rounded-full bg-[var(--primary)]" style={{ width: `${width}%` }} />
-                    </div>
-                  </div>
-                );
-              })}
+          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-xl font-extrabold">تقویم مراجعین</h2>
+              <p className="mt-2 text-sm leading-7 text-warm-500">وقت‌های موفق، زرد و خالی در اینجا مدیریت می‌شوند. انتخاب تاریخ شمسی، ذخیره داخلی را تغییر نمی‌دهد.</p>
             </div>
-          )}
+            <CalendarDays className="text-sage" size={24} />
+          </div>
+          <div className="calendar-toolbar">
+            {[{ key: "today", label: "امروز" }, { key: "week", label: "این هفته" }, { key: "month", label: "این ماه" }, { key: "exact", label: "تاریخ دقیق" }, { key: "range", label: "بازه دلخواه" }, { key: "all", label: "همه" }].map((item) => (
+              <button key={item.key} type="button" onClick={() => setCalendarMode(item.key as typeof calendarMode)} className={cn("filter-chip", calendarMode === item.key && "filter-chip-active")}>{item.label}</button>
+            ))}
+          </div>
+          {calendarMode === "exact" && <div className="mt-4 max-w-xs"><DateField label="تاریخ شمسی" value={exactDate} onChange={setExactDate} /></div>}
+          {calendarMode === "range" && <div className="mt-4 grid gap-4 md:grid-cols-2"><DateField label="از تاریخ" value={rangeStart} onChange={setRangeStart} /><DateField label="تا تاریخ" value={rangeEnd} onChange={setRangeEnd} /></div>}
+          <div className="mt-5">
+            {!stats ? <SkeletonRows /> : calendarVisits.length === 0 ? <EmptyState icon={CalendarDays} title="وقتی در این بازه ثبت نشده" text="برای مراجع جدید یا مراجع قبلی ویزیت ثبت کنید تا اینجا دیده شود." /> : <div className="grid gap-3">{calendarVisits.map((visit) => <DashboardVisitRow key={`${visit.id}-${visit.visit_date}-${visit.visit_time}`} visit={visit} />)}</div>}
+          </div>
         </div>
 
-        <div className="card p-6">
-          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">ویزیت‌های پیش‌رو</h2><CalendarDays className="text-sage" size={22} /></div>
-          {!stats ? <SkeletonRows /> : stats.upcoming_visits.length === 0 ? <EmptyState icon={CalendarDays} title="ویزیت آینده‌ای ثبت نشده" text="وقتی برای مراجعین ویزیت یا پیگیری آینده ثبت شود، اینجا نمایش داده می‌شود." /> : (
-            <div className="grid gap-3">
-              {stats.upcoming_visits.map((visit) => <DashboardVisitRow key={`${visit.id}-${visit.visit_date}`} visit={visit} />)}
-            </div>
-          )}
+        <div className="grid gap-4">
+          <Stat label="ویزیت امروز" value={stats?.visits_today} icon={CalendarCheck} hint="قرارهای امروز" />
+          <Stat label="پیگیری آینده" value={stats?.upcoming_followups} icon={Clock3} hint="مراجع نیازمند پیگیری" />
+          <Stat label="ویزیت ۷ روز آینده" value={stats?.visits_next_7_days} icon={CalendarDays} hint="برنامه نزدیک" />
         </div>
       </section>
 
       <section className="mt-5 grid gap-5 xl:grid-cols-2">
         <div className="card p-6">
-          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">مراجعین اخیر</h2><Users className="text-sage" size={22} /></div>
-          {!stats ? <SkeletonRows /> : stats.recent_clients.length === 0 ? <EmptyState icon={Users} title="هنوز مراجعی ثبت نشده" text="اولین پرونده را بسازید تا این بخش زنده شود." /> : <div className="grid gap-3">{stats.recent_clients.map((client) => <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} />)}</div>}
+          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-extrabold">مراجعین اخیر</h2><Users className="text-sage" size={22} /></div>
+          {!stats ? <SkeletonRows /> : stats.recent_clients.length === 0 ? <EmptyState icon={Users} title="هنوز مراجعی ثبت نشده" text="اولین پرونده را بسازید؛ این بخش آخرین پرونده‌ها را نشان می‌دهد." /> : <div className="grid gap-3">{stats.recent_clients.slice(0, 4).map((client) => <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} />)}</div>}
         </div>
-
         <div className="card p-6">
-          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-bold">آخرین ویزیت‌ها</h2><TrendingUp className="text-sage" size={22} /></div>
-          {!stats ? <SkeletonRows /> : stats.recent_visits.length === 0 ? <EmptyState icon={ClipboardList} title="هنوز ویزیتی ثبت نشده" text="بعد از ثبت اولین ویزیت، تاریخچه سریع اینجا دیده می‌شود." /> : (
-            <div className="grid gap-3">
-              {stats.recent_visits.map((visit) => <DashboardVisitRow key={`${visit.id}-${visit.visit_date}-recent`} visit={visit} />)}
-            </div>
-          )}
+          <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-extrabold">نقشه کار مراجع</h2><Target className="text-sage" size={22} /></div>
+          <div className="workflow-map">
+            <div><strong>۱. شخص</strong><span>اطلاعات پایه و تماس</span></div>
+            <div><strong>۲. مسیر مراقبت</strong><span>رژیم، بادی آنالیز، دستگاه یا ترکیبی</span></div>
+            <div><strong>۳. ویزیت</strong><span>اندازه‌گیری، خدمات، فایل و یادداشت</span></div>
+            <div><strong>۴. پیگیری</strong><span>روند، گزارش و ویزیت بعدی</span></div>
+          </div>
         </div>
       </section>
     </>
@@ -572,6 +576,7 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [goalFilter, setGoalFilter] = useState<ClientGoalFilter>("all");
+  const [mode, setMode] = useState<"new" | "returning">("returning");
 
   useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -612,12 +617,26 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
 
   return (
     <>
-      <PageHeader title="مراجعین" subtitle="جست‌وجو، فیلتر براساس هدف، و مدیریت پرونده‌ها با کمترین کلیک." action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>} />
-      <section className="card p-5">
+      <PageHeader title="مراجعین" subtitle="دو مسیر کاری استاندارد: مراجع جدید یا ویزیت برای مراجع قبلی. پرونده‌ها مرحله‌ای و تو‌در‌تو مدیریت می‌شوند." action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>} />
+
+      <section className="client-workspace-grid">
+        <button type="button" onClick={() => { setMode("new"); onNew(); }} className={cn("workspace-choice", mode === "new" && "workspace-choice-active")}>
+          <span className="choice-icon"><Plus size={22} /></span>
+          <strong>مراجع جدید</strong>
+          <small>ثبت اطلاعات پایه، انتخاب نوع شروع، ساخت پرونده و فولدر مراجع</small>
+        </button>
+        <button type="button" onClick={() => setMode("returning")} className={cn("workspace-choice", mode === "returning" && "workspace-choice-active")}>
+          <span className="choice-icon"><Users size={22} /></span>
+          <strong>مراجع قبلی</strong>
+          <small>جست‌وجو، مشاهده خلاصه پرونده، شروع ویزیت جدید یا محاسبات</small>
+        </button>
+      </section>
+
+      <section className="card mt-5 p-5">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={20} />
-            <input className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی نام، موبایل، ایمیل یا هدف" />
+            <input id="client-search-shortcut" className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی مراجع قبلی: نام، موبایل، ایمیل یا هدف" />
           </div>
           <label className="flex h-12 items-center gap-2 rounded-control border border-warm-100 bg-warm-50 px-4 text-sm text-warm-500">
             <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
@@ -626,19 +645,12 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2">
           {Object.entries(clientGoalFilters).map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setGoalFilter(key as ClientGoalFilter)}
-              className={cn("filter-chip", goalFilter === key && "filter-chip-active")}
-            >
-              {label}
-            </button>
+            <button key={key} type="button" onClick={() => setGoalFilter(key as ClientGoalFilter)} className={cn("filter-chip", goalFilter === key && "filter-chip-active")}>{label}</button>
           ))}
-          <span className="numbers mr-auto text-xs text-warm-500">{clients ? `${toPersianDigits(visibleCount)} از ${toPersianDigits(totalCount)}` : "در حال خواندن"}</span>
+          <span className="numbers mr-auto rounded-full bg-warm-50 px-3 py-2 text-xs font-bold text-warm-500">{clients ? `${toPersianDigits(visibleCount)} از ${toPersianDigits(totalCount)} مراجع` : "در حال خواندن"}</span>
         </div>
         <div className="mt-5 grid gap-3">
-          {!clients ? <SkeletonRows /> : filtered.length === 0 ? <EmptyState icon={Search} title="موردی پیدا نشد" text={query || goalFilter !== "all" ? "فیلتر هدف یا عبارت جست‌وجو را تغییر دهید." : "اولین پرونده را ثبت کنید."} /> : filtered.map((client) => (
+          {!clients ? <SkeletonRows /> : filtered.length === 0 ? <EmptyState icon={Search} title="موردی پیدا نشد" text={query || goalFilter !== "all" ? "فیلتر هدف یا عبارت جست‌وجو را تغییر دهید." : "برای شروع، اولین پرونده را ثبت کنید."} /> : filtered.map((client) => (
             <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} onCalculate={() => onCalculate(client)} onArchive={() => archive(client)} />
           ))}
         </div>
@@ -657,12 +669,14 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const [activeTab, setActiveTab] = useState<ProfileTab>(client ? "summary" : "base");
   const [errors, setErrors] = useState<FieldErrors>({});
   const [topError, setTopError] = useState("");
-  const [catalogForm, setCatalogForm] = useState({ name: "", default_price: 0, default_duration_minutes: "" });
+  const [catalogForm, setCatalogForm] = useState({ group_key: "diet" as ServiceGroup, name: "", default_price: 0, default_duration_minutes: "" });
   const [serviceForm, setServiceForm] = useState({ visitId: "", catalogId: "", quantity: 1, price: 0, body_area: "", notes: "" });
+  const [attachmentForm, setAttachmentForm] = useState({ category: "other" as AttachmentCategory, title: "", notes: "" });
   const [visitForm, setVisitForm] = useState({
     visit_date: todayIsoDate(),
     visit_time: "",
     status: "completed",
+    visit_type: "initial" as VisitType,
     reason: "",
     weight_kg: client?.weight_kg ?? emptyClient.weight_kg,
     height_cm: client?.height_cm ?? emptyClient.height_cm,
@@ -678,6 +692,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       visit_date: todayIsoDate(),
       visit_time: "",
       status: "completed",
+      visit_type: "initial" as VisitType,
       reason: "",
       weight_kg: source?.weight_kg ?? emptyClient.weight_kg,
       height_cm: source?.height_cm ?? emptyClient.height_cm,
@@ -857,6 +872,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           visit_date: visitForm.visit_date,
           visit_time: visitForm.visit_time,
           status: visitForm.status,
+          visit_type: visitForm.visit_type,
           reason: visitForm.reason,
           clinical_notes: visitForm.notes,
           private_notes: "",
@@ -909,10 +925,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         clientId: client.id,
         visitId,
         path: selected,
-        category: "other",
-        title: "",
+        category: attachmentForm.category,
+        title: attachmentForm.title,
         attachmentDate: todayIsoDate(),
-        notes: "",
+        notes: attachmentForm.notes,
       });
       setAttachments((items) => [attachment, ...items]);
       toast("فایل به پرونده اضافه شد.");
@@ -964,6 +980,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     try {
       const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", {
         item: {
+          group_key: catalogForm.group_key,
           name: catalogForm.name.trim(),
           default_price: catalogForm.default_price,
           default_duration_minutes: catalogForm.default_duration_minutes ? Number(catalogForm.default_duration_minutes) : null,
@@ -973,7 +990,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       });
       setServiceCatalog((items) => [...items, saved]);
       setServiceForm((current) => ({ ...current, catalogId: String(saved.id ?? ""), price: saved.default_price ?? 0 }));
-      setCatalogForm({ name: "", default_price: 0, default_duration_minutes: "" });
+      setCatalogForm({ group_key: catalogForm.group_key, name: "", default_price: 0, default_duration_minutes: "" });
       toast("خدمت ذخیره شد.");
     } catch (error) {
       toast(getErrorMessage(error, "ذخیره خدمت انجام نشد."), "error");
@@ -1000,6 +1017,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           visit_id: visitId,
           service_id: catalogItem.id ?? null,
           service_name_snapshot: catalogItem.name,
+          service_group_snapshot: catalogItem.group_key ?? "other",
           body_area: serviceForm.body_area,
           device_name: "",
           duration_minutes: catalogItem.default_duration_minutes ?? null,
@@ -1025,6 +1043,30 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
 
   const baseInfo = (
     <div className="grid gap-5 md:grid-cols-2">
+      {!client?.id && (
+        <div className="md:col-span-2 rounded-card border border-warm-100 bg-white p-4">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-sm font-bold text-olive">نوع شروع پرونده</p>
+              <p className="helper mt-1">اول مشخص کنید مراجع برای چه مسیری آمده؛ فرم‌ها و ویزیت‌های بعدی بر همین اساس ساده‌تر مدیریت می‌شوند.</p>
+            </div>
+            <span className="pill-soft">progressive</span>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-5">
+            {newClientStartOptions.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setVisitForm((current) => ({ ...current, visit_type: option.key, reason: option.title }))}
+                className={cn("start-option-card", visitForm.visit_type === option.key && "start-option-card-active")}
+              >
+                <strong>{option.title}</strong>
+                <small>{option.description}</small>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="md:col-span-2 flex flex-col gap-4 rounded-card border border-warm-100 bg-warm-50 p-4 sm:flex-row sm:items-center">
         <ProfileAvatar client={form} size="lg" />
         <div className="flex-1">
@@ -1061,6 +1103,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => { setVisitForm({ ...visitForm, visit_date: value }); setErrors((current) => ({ ...current, visit_date: undefined })); }} error={errors.visit_date} />
           <TimeField label="ساعت" value={visitForm.visit_time} onChange={(value) => { setVisitForm({ ...visitForm, visit_time: value }); setErrors((current) => ({ ...current, visit_time: undefined })); }} error={errors.visit_time} />
+          <SelectField label="نوع ویزیت" value={visitForm.visit_type} onChange={(value) => setVisitForm({ ...visitForm, visit_type: value as VisitType })} options={visitTypeLabels} />
           <SelectField label="وضعیت" value={visitForm.status} onChange={(value) => setVisitForm({ ...visitForm, status: value })} options={{ completed: "انجام شد", scheduled: "برنامه‌ریزی شده", canceled: "لغو شد" }} />
           <TextField label="دلیل مراجعه" value={visitForm.reason} onChange={(value) => setVisitForm({ ...visitForm, reason: value })} />
           <NumberField label="وزن" value={visitForm.weight_kg} onChange={(value) => setVisitForm({ ...visitForm, weight_kg: value })} suffix="کیلوگرم" error={errors.weight_kg} />
@@ -1081,6 +1124,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           <div className="sm:col-span-2">
             <label className="label">یادداشت ویزیت</label>
             <textarea className="control mt-2 min-h-24 w-full py-3" value={visitForm.notes} onChange={(event) => setVisitForm({ ...visitForm, notes: event.target.value })} />
+          </div>
+          <div className="sm:col-span-2 nested-hint-card">
+            <strong>{visitTypeLabels[visitForm.visit_type]}</strong>
+            <span>{visitForm.visit_type === "diet_followup" ? "برای رژیم، وزن، پایبندی و هدف هفته بعد را ثبت کنید." : visitForm.visit_type === "body_analysis" ? "برای بادی آنالیز، فایل دستگاه و اندازه‌های بدن را در تب فایل‌ها/اندازه‌گیری‌ها اضافه کنید." : visitForm.visit_type === "device" ? "برای دستگاه، ناحیه بدن و خدمت مرتبط را در تب خدمات ثبت کنید." : "اطلاعات عمومی ویزیت ثبت می‌شود؛ جزئیات پیشرفته در تب‌های تو‌در‌تو قرار دارد."}</span>
           </div>
         </div>
         <div className="mt-5"><SecondaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</SecondaryButton></div>
@@ -1106,7 +1153,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
                       <div className="mt-3 grid gap-2">
                         {services.map((service) => (
                           <div key={service.id ?? `${service.service_name_snapshot}-${service.total}`} className="flex flex-wrap items-center justify-between gap-2 rounded-control bg-white px-3 py-2 text-xs">
-                            <span className="font-semibold">{service.service_name_snapshot}{service.body_area ? ` - ${service.body_area}` : ""}</span>
+                            <span className="font-semibold">{serviceGroupLabels[(service.service_group_snapshot ?? "other") as ServiceGroup] ?? "سایر"} · {service.service_name_snapshot}{service.body_area ? ` - ${service.body_area}` : ""}</span>
                             <span className="numbers text-warm-500">{formatNumber(service.total)} تومان</span>
                           </div>
                         ))}
@@ -1137,6 +1184,9 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
             onChange={(value) => setServiceForm({ ...serviceForm, visitId: value })}
             options={{ "": "بدون ویزیت", ...Object.fromEntries(visits.map((item) => [String(item.visit.id ?? ""), formatPersianDate(item.visit.visit_date)])) }}
           />
+          <SelectField label="دسته فایل" value={attachmentForm.category} onChange={(value) => setAttachmentForm({ ...attachmentForm, category: value as AttachmentCategory })} options={attachmentCategoryLabels} />
+          <TextField label="عنوان فایل" value={attachmentForm.title} onChange={(value) => setAttachmentForm({ ...attachmentForm, title: value })} placeholder="مثلاً آزمایش تیرماه یا پرینت بادی آنالیز" />
+          <TextField label="یادداشت فایل" value={attachmentForm.notes} onChange={(value) => setAttachmentForm({ ...attachmentForm, notes: value })} />
           <SecondaryButton icon={FileUp} onClick={chooseAttachment}>افزودن فایل</SecondaryButton>
           <SecondaryButton icon={FolderOpen} onClick={openClientFolder}>باز کردن پوشه پرونده</SecondaryButton>
           <SecondaryButton icon={FileText} onClick={exportClientReport}>ساخت پرونده چاپ/PDF</SecondaryButton>
@@ -1153,7 +1203,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
               <button key={attachment.id ?? attachment.local_path} type="button" onClick={() => openAttachment(attachment)} className="soft-transition rounded-control border border-warm-100 bg-warm-50 px-4 py-3 text-right hover:bg-white">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-semibold">{attachment.title || attachment.file_name}</span>
-                  <span className="text-xs text-olive">{attachment.attachment_date ? formatPersianDate(attachment.attachment_date) : ""}</span>
+                  <span className="text-xs text-olive">{attachmentCategoryLabels[attachment.category as AttachmentCategory] ?? attachment.category} · {attachment.attachment_date ? formatPersianDate(attachment.attachment_date) : ""}</span>
                 </div>
                 <p className="mt-2 truncate text-xs text-warm-500">{attachment.local_path}</p>
               </button>
@@ -1172,6 +1222,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           <h2 className="text-lg font-bold">خدمات</h2>
         </div>
         <div className="mt-5 grid gap-4">
+          <SelectField label="گروه خدمت" value={catalogForm.group_key} onChange={(value) => setCatalogForm({ ...catalogForm, group_key: value as ServiceGroup })} options={serviceGroupLabels} />
           <TextField label="نام خدمت جدید" value={catalogForm.name} onChange={(value) => setCatalogForm({ ...catalogForm, name: value })} />
           <NumberField label="قیمت پیش‌فرض" value={catalogForm.default_price} onChange={(value) => setCatalogForm({ ...catalogForm, default_price: value })} suffix="تومان" />
           <TextField label="مدت زمان پیش‌فرض" value={catalogForm.default_duration_minutes} onChange={(value) => setCatalogForm({ ...catalogForm, default_duration_minutes: value })} placeholder="دقیقه" />
@@ -1182,20 +1233,112 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         <h2 className="text-lg font-bold">ثبت خدمت برای ویزیت</h2>
         <div className="mt-5 grid gap-4 md:grid-cols-2">
           <SelectField label="ویزیت" value={serviceForm.visitId} onChange={(value) => setServiceForm({ ...serviceForm, visitId: value })} options={Object.fromEntries(visits.map((item) => [String(item.visit.id ?? ""), formatPersianDate(item.visit.visit_date)]))} />
-          <SelectField label="خدمت" value={serviceForm.catalogId} onChange={selectCatalogItem} options={Object.fromEntries(serviceCatalog.map((item) => [String(item.id ?? ""), item.name]))} />
+          <SelectField label="خدمت" value={serviceForm.catalogId} onChange={selectCatalogItem} options={Object.fromEntries(serviceCatalog.map((item) => [String(item.id ?? ""), `${serviceGroupLabels[(item.group_key ?? "other") as ServiceGroup] ?? "سایر"} · ${item.name}`]))} />
           <NumberField label="تعداد" value={serviceForm.quantity} onChange={(value) => setServiceForm({ ...serviceForm, quantity: value })} suffix="عدد" />
           <NumberField label="قیمت" value={serviceForm.price} onChange={(value) => setServiceForm({ ...serviceForm, price: value })} suffix="تومان" />
           <TextField label="ناحیه بدن" value={serviceForm.body_area} onChange={(value) => setServiceForm({ ...serviceForm, body_area: value })} />
           <TextField label="یادداشت" value={serviceForm.notes} onChange={(value) => setServiceForm({ ...serviceForm, notes: value })} />
         </div>
         <div className="mt-5"><SecondaryButton icon={Plus} onClick={saveVisitService}>ثبت خدمت</SecondaryButton></div>
-        <div className="mt-6 grid gap-3">
-          {serviceCatalog.map((item) => (
-            <div key={item.id ?? item.name} className="flex flex-wrap items-center justify-between gap-2 rounded-control border border-warm-100 bg-warm-50 px-4 py-3 text-sm">
-              <span className="font-semibold">{item.name}</span>
-              <span className="numbers text-warm-500">{formatNumber(item.default_price)} تومان</span>
+        <div className="mt-6 grid gap-4">
+          {serviceGroupKeys.map((group) => {
+            const items = serviceCatalog.filter((item) => (item.group_key ?? "other") === group);
+            if (!items.length) return null;
+            return (
+              <div key={group} className="service-group-card">
+                <div className="mb-3 flex items-center justify-between">
+                  <strong>{serviceGroupLabels[group]}</strong>
+                  <span className="numbers text-xs text-warm-500">{formatNumber(items.length)} خدمت</span>
+                </div>
+                <div className="grid gap-2">
+                  {items.map((item) => (
+                    <div key={item.id ?? item.name} className="flex flex-wrap items-center justify-between gap-2 rounded-control border border-warm-100 bg-warm-50 px-4 py-3 text-sm">
+                      <span className="font-semibold">{item.name}</span>
+                      <span className="numbers text-warm-500">{formatNumber(item.default_price)} تومان</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const tracksPanel = client?.id ? (
+    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
+      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
+        <h2 className="text-lg font-bold">مسیرهای مراقبت</h2>
+        <p className="helper mt-2">هر مراجع می‌تواند یک یا چند مسیر داشته باشد. این نسخه مسیر را از هدف و نوع خدمات ثبت‌شده خلاصه می‌کند تا فرم سنگین نشود.</p>
+        <div className="mt-5 grid gap-3">
+          {newClientStartOptions.filter((option) => option.key !== "initial").map((option) => (
+            <div key={option.key} className="care-track-card">
+              <strong>{option.title}</strong>
+              <span>{option.description}</span>
             </div>
           ))}
+        </div>
+      </div>
+      <div className="rounded-card border border-warm-100 bg-white p-5">
+        <h2 className="text-lg font-bold">مسیر فعال فعلی</h2>
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <ResultCard title="هدف اصلی" value={goalLabels[form.goal]} unit="" text="در اطلاعات پایه قابل تغییر است." />
+          <ResultCard title="خدمات ثبت‌شده" value={formatNumber(Object.values(visitServices).flat().length)} unit="خدمت" text="از تب خدمات به ویزیت‌ها وصل می‌شود." />
+          <ResultCard title="فایل‌های پرونده" value={formatNumber(attachments.length)} unit="فایل" text="آزمایش، بادی آنالیز، رژیم، دستگاه و سایر." />
+          <ResultCard title="ویزیت‌ها" value={formatNumber(visits.length)} unit="جلسه" text="تاریخچه زمانی مراقبت." featured />
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const measurementsPanel = client?.id ? (
+    <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+      <div className="rounded-card border border-warm-100 bg-white p-5">
+        <h2 className="text-lg font-bold">اندازه‌گیری‌های عمومی</h2>
+        <p className="helper mt-2">وزن، BMI و دورهای بدن از ویزیت‌ها ساخته می‌شوند. برای هر ویزیت داده لازم را ثبت کنید.</p>
+        <div className="mt-5">
+          {records.length === 0 ? <EmptyState icon={ClipboardList} title="اندازه‌گیری ثبت نشده" text="اولین ویزیت را ثبت کنید تا روندها اینجا ساخته شوند." /> : <WeightHistory records={records} />}
+        </div>
+      </div>
+      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
+        <h2 className="text-lg font-bold">بادی آنالیز و دستگاه</h2>
+        <p className="helper mt-2">پرینت دستگاه، عکس‌ها و گزارش ترکیب بدن را از تب فایل‌ها با دسته «بادی آنالیز» یا «دستگاه» بارگذاری کنید.</p>
+        <div className="mt-5 grid gap-3">
+          {attachmentCategoryKeys.filter((key) => ["body_analysis", "device", "before_after"].includes(key)).map((key) => (
+            <div key={key} className="care-track-card">
+              <strong>{attachmentCategoryLabels[key]}</strong>
+              <span>{formatNumber(attachments.filter((item) => item.category === key).length)} فایل ثبت‌شده</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  const nutritionPanel = client?.id ? (
+    <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+      <div className="rounded-card border border-warm-100 bg-white p-5">
+        <h2 className="text-lg font-bold">محاسبات و رژیم</h2>
+        <p className="helper mt-2">برای رژیم، محاسبات انرژی از اطلاعات پایه ساخته می‌شود و در گزارش پرونده استفاده می‌شود.</p>
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          {(() => {
+            const calc = calculateNutrition(form);
+            return <>
+              <ResultCard title="BMI" value={formatNumber(calc.bmi, 1)} unit={bmiCategory(calc.bmi)} text="وضعیت سریع وزن بر اساس قد و وزن." />
+              <ResultCard title="کالری هدف" value={formatNumber(calc.targetCalories)} unit="کیلوکالری" text="براساس هدف، ABW و سطح فعالیت." featured />
+              <ResultCard title="پروتئین" value={formatNumber(calc.proteinGrams)} unit="گرم" text={`${toPersianDigits(calc.proteinPercent)}٪ از کالری هدف.`} />
+              <ResultCard title="کربوهیدرات" value={formatNumber(calc.carbsGrams)} unit="گرم" text={`${toPersianDigits(calc.carbsPercent)}٪ از کالری هدف.`} />
+            </>;
+          })()}
+        </div>
+      </div>
+      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
+        <h2 className="text-lg font-bold">پایش رژیم</h2>
+        <p className="helper mt-2">در ویزیت پیگیری رژیم، وزن فعلی، یادداشت پایبندی و هدف هفته بعد را ثبت کنید. فایل برنامه غذایی را از تب فایل‌ها بارگذاری کنید.</p>
+        <div className="mt-5 grid gap-3">
+          <SecondaryButton icon={Calculator} onClick={() => toast("از منوی محاسبات تغذیه می‌توانید محاسبه جداگانه انجام دهید.")}>محاسبات تغذیه</SecondaryButton>
+          <SecondaryButton icon={FileUp} onClick={() => setActiveTab("files")}>بارگذاری فایل رژیم</SecondaryButton>
         </div>
       </div>
     </div>
@@ -1218,7 +1361,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         {client?.id && (
           <div className="mb-6 flex flex-wrap gap-2 border-b border-warm-100 pb-4">
             <TabButton active={activeTab === "summary"} onClick={() => setActiveTab("summary")}>خلاصه</TabButton>
+            <TabButton active={activeTab === "tracks"} onClick={() => setActiveTab("tracks")}>مسیرها</TabButton>
             <TabButton active={activeTab === "visits"} onClick={() => setActiveTab("visits")}>ویزیت‌ها</TabButton>
+            <TabButton active={activeTab === "measurements"} onClick={() => setActiveTab("measurements")}>اندازه‌گیری‌ها</TabButton>
+            <TabButton active={activeTab === "nutrition"} onClick={() => setActiveTab("nutrition")}>رژیم و محاسبات</TabButton>
             <TabButton active={activeTab === "files"} onClick={() => setActiveTab("files")}>فایل‌ها</TabButton>
             <TabButton active={activeTab === "services"} onClick={() => setActiveTab("services")}>خدمات</TabButton>
             <TabButton active={activeTab === "base"} onClick={() => setActiveTab("base")}>اطلاعات پایه</TabButton>
@@ -1233,7 +1379,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
             <ResultCard title="مراجعه بعدی" value={latestVisit?.visit.next_visit_enabled && latestVisit.visit.next_visit_date ? isoToJalaliInput(latestVisit.visit.next_visit_date) : "—"} unit={latestVisit?.visit.next_visit_time || ""} text={latestVisit?.visit.next_visit_enabled ? "از آخرین ویزیت ثبت شده." : "برای این مراجعه زمان بعدی ثبت نشده است."} />
           </div>
         )}
+        {client?.id && activeTab === "tracks" ? tracksPanel : null}
         {client?.id && activeTab === "visits" ? visitsPanel : null}
+        {client?.id && activeTab === "measurements" ? measurementsPanel : null}
+        {client?.id && activeTab === "nutrition" ? nutritionPanel : null}
         {client?.id && activeTab === "files" ? filesPanel : null}
         {client?.id && activeTab === "services" ? servicesPanel : null}
         <div className="mt-6"><SecondaryButton onClick={onBack}>بازگشت به فهرست</SecondaryButton></div>
@@ -1753,24 +1902,6 @@ function Stat({ label, value, icon: Icon, hint }: { label: string; value?: numbe
         <p className={cn("metric-value text-charcoal", display.isZero && "metric-value-empty")}>{display.text}</p>
       )}
       <p className="mt-3 text-xs leading-6 text-warm-500">{display.isZero ? "هنوز موردی ثبت نشده" : hint}</p>
-    </div>
-  );
-}
-
-function RevenueStat({ value }: { value?: number }) {
-  const display = currencyDisplay(value);
-  return (
-    <div className={cn("metric-card card p-5", display.isZero && "metric-card-empty")}>
-      <div className="mb-5 flex items-center justify-between gap-3 text-warm-500">
-        <span className="text-sm font-semibold">درآمد خدمات این ماه</span>
-        <span className="grid h-9 w-9 place-items-center rounded-control bg-warm-50 text-olive"><BadgeDollarSign size={20} /></span>
-      </div>
-      {value === undefined ? (
-        <div className="h-11 w-28 animate-pulse rounded-control bg-warm-100" />
-      ) : (
-        <p className={cn("metric-value text-charcoal", display.isZero && "metric-value-empty")}>{display.text}</p>
-      )}
-      <p className="mt-3 text-xs leading-6 text-warm-500">{display.isZero ? "بعد از ثبت خدمات ویزیت نمایش داده می‌شود" : "تومان"}</p>
     </div>
   );
 }
