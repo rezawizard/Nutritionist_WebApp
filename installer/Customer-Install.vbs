@@ -4,7 +4,7 @@ Dim shell, fso, folder, file, installer, command, appData, source, backupRoot, b
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 folder = fso.GetParentFolderName(WScript.ScriptFullName)
-installer = fso.BuildPath(folder, "Dietoy-Setup.exe")
+installer = fso.BuildPath(folder, "Dietoy-FINAL-0.3.0-Setup.exe")
 
 If Not fso.FileExists(installer) Then
   installer = ""
@@ -19,7 +19,7 @@ If Not fso.FileExists(installer) Then
 End If
 
 If installer = "" Then
-  MsgBox "Setup file was not found. Keep INSTALL.vbs beside Dietoy-Setup.exe.", vbCritical, "Dietoy"
+  MsgBox "Setup file was not found. Keep INSTALL.vbs beside Dietoy-FINAL-0.3.0-Setup.exe.", vbCritical, "Dietoy"
   WScript.Quit 1
 End If
 

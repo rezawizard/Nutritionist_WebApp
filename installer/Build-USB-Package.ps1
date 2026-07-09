@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $releaseDir = Join-Path $root "release-usb"
 $bundleDir = Join-Path $root "src-tauri\target\release\bundle\nsis"
-$setupName = "Dietoy-Setup.exe"
+$setupName = "Dietoy-FINAL-0.3.0-Setup.exe"
 $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
 Set-Location $root

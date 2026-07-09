@@ -16,7 +16,7 @@ For Each file In fso.GetFolder(folder).Files
 Next
 
 If installer = "" Then
-  MsgBox "Installer EXE was not found in this folder. Put Dietoy-Setup.exe beside this VBS file.", vbCritical, "Dietoy"
+  MsgBox "Installer EXE was not found in this folder. Put Dietoy-FINAL-0.3.0-Setup.exe beside this VBS file.", vbCritical, "Dietoy"
   WScript.Quit 1
 End If
 
