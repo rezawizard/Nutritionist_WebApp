@@ -2,11 +2,14 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
+  Activity,
   Calculator,
   Camera,
   CalendarCheck,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   ClipboardList,
   Database,
@@ -25,21 +28,24 @@ import {
   Phone,
   Plus,
   RotateCcw,
+  Ruler,
   Save,
   Search,
   Settings as SettingsIcon,
   Sparkles,
   Target,
   TrendingUp,
+  X,
   UserRound,
   Users,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from "react";
 import {
   activityLabels,
   bmiCategory,
   calculateNutrition,
   cn,
+  coerceDateToIso,
   defaultCalculationSettings,
   emptyClient,
   formatNumber,
@@ -49,8 +55,11 @@ import {
   jalaliInputToIso,
   jalaliPartsFromIso,
   daysInJalaliMonth,
+  persianMonthNames,
+  persianWeekdayShortLabels,
   genderLabels,
   goalLabels,
+  careTrackLabels,
   visitTypeLabels,
   serviceGroupLabels,
   attachmentCategoryLabels,
@@ -61,7 +70,7 @@ import {
   todayIsoDate,
   toPersianDigits,
 } from "./lib";
-import type { ActivityLevel, Attachment, AttachmentCategory, Client, DashboardStats, Gender, Goal, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitService, VisitType } from "./types";
+import type { ActivityLevel, Attachment, AttachmentCategory, CareTrackType, Client, DashboardStats, ExtendedMeasurements, Gender, Goal, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitService, VisitType } from "./types";
 import type { ClientRecord } from "./types";
 
 const defaultSettings: Settings = {
@@ -124,6 +133,15 @@ const goalKeys: Goal[] = ["lose", "maintain", "gain"];
 const serviceGroupKeys: ServiceGroup[] = ["diet", "consultation", "body_analysis", "device", "followup", "package", "report", "other"];
 const attachmentCategoryKeys: AttachmentCategory[] = ["body_analysis", "lab", "medical_report", "diet_plan", "device", "before_after", "report", "other"];
 const visitTypeKeys: VisitType[] = ["initial", "diet_followup", "body_analysis", "device", "consultation", "combined"];
+const emptyServiceEditor: ServiceCatalogItem = {
+  group_key: "diet",
+  name: "",
+  description: "",
+  default_price: 0,
+  default_duration_minutes: null,
+  body_area_required: false,
+  active: true,
+};
 
 const newClientStartOptions: Array<{ key: VisitType; title: string; description: string }> = [
   { key: "initial", title: "شروع پرونده", description: "اطلاعات پایه، هدف و اولین اندازه‌گیری" },
@@ -170,6 +188,148 @@ const calculationSettingGroups: Array<{ title: string; description: string; fiel
     fields: calculationSettingsFields.slice(11),
   },
 ];
+
+const careTrackKeys: CareTrackType[] = ["diet", "body_analysis", "device", "consultation", "combined"];
+
+const careTrackDescriptions: Record<CareTrackType, string> = {
+  diet: "رژیم، محاسبات انرژی، برنامه غذایی و پیگیری پایبندی",
+  body_analysis: "ترکیب بدن، پرینت دستگاه و روند شاخص‌های بادی آنالیز",
+  device: "جلسات لاغری موضعی، ناحیه هدف، اندازه‌های دو سمت بدن و عکس‌های قبل/بعد",
+  consultation: "مشاوره تغذیه و سبک زندگی، اهداف رفتاری و پیگیری",
+  combined: "نمای یکپارچه از رژیم، بادی آنالیز، دستگاه و خدمات ترکیبی",
+};
+
+const trackVisitTypes: Record<CareTrackType, VisitType[]> = {
+  diet: ["initial", "diet_followup"],
+  body_analysis: ["body_analysis"],
+  device: ["device"],
+  consultation: ["consultation"],
+  combined: ["combined"],
+};
+
+const trackServiceGroups: Record<CareTrackType, ServiceGroup[]> = {
+  diet: ["diet", "followup"],
+  body_analysis: ["body_analysis"],
+  device: ["device", "package"],
+  consultation: ["consultation", "followup"],
+  combined: serviceGroupKeys,
+};
+
+const trackAttachmentCategories: Record<CareTrackType, AttachmentCategory[]> = {
+  diet: ["diet_plan", "lab", "medical_report"],
+  body_analysis: ["body_analysis", "lab"],
+  device: ["device", "before_after"],
+  consultation: ["medical_report", "report", "other"],
+  combined: attachmentCategoryKeys,
+};
+
+type MeasurementForm = Record<keyof ExtendedMeasurements, string> & {
+  body_fat_percent: string;
+  muscle_mass: string;
+  visceral_fat: string;
+  waist_cm: string;
+  abdomen_cm: string;
+  hip_cm: string;
+  chest_cm: string;
+  neck_cm: string;
+};
+
+const emptyMeasurementForm: MeasurementForm = {
+  body_fat_percent: "",
+  muscle_mass: "",
+  visceral_fat: "",
+  waist_cm: "",
+  abdomen_cm: "",
+  hip_cm: "",
+  chest_cm: "",
+  neck_cm: "",
+  body_water_percent: "",
+  fat_mass_kg: "",
+  muscle_percent: "",
+  metabolic_age: "",
+  device_score: "",
+  upper_abdomen_cm: "",
+  lower_abdomen_cm: "",
+  upper_arm_left_cm: "",
+  upper_arm_right_cm: "",
+  forearm_left_cm: "",
+  forearm_right_cm: "",
+  wrist_left_cm: "",
+  wrist_right_cm: "",
+  thigh_left_cm: "",
+  thigh_right_cm: "",
+  calf_left_cm: "",
+  calf_right_cm: "",
+  ankle_left_cm: "",
+  ankle_right_cm: "",
+};
+
+const extendedMeasurementLabels: Array<{ key: keyof ExtendedMeasurements; label: string; suffix: string }> = [
+  { key: "body_water_percent", label: "آب بدن", suffix: "درصد" },
+  { key: "fat_mass_kg", label: "توده چربی", suffix: "کیلوگرم" },
+  { key: "muscle_percent", label: "درصد عضله", suffix: "درصد" },
+  { key: "metabolic_age", label: "سن متابولیک", suffix: "سال" },
+  { key: "device_score", label: "امتیاز دستگاه", suffix: "" },
+  { key: "upper_abdomen_cm", label: "بالای شکم", suffix: "سانتی‌متر" },
+  { key: "lower_abdomen_cm", label: "پایین شکم", suffix: "سانتی‌متر" },
+  { key: "upper_arm_left_cm", label: "بازوی چپ", suffix: "سانتی‌متر" },
+  { key: "upper_arm_right_cm", label: "بازوی راست", suffix: "سانتی‌متر" },
+  { key: "forearm_left_cm", label: "ساعد چپ", suffix: "سانتی‌متر" },
+  { key: "forearm_right_cm", label: "ساعد راست", suffix: "سانتی‌متر" },
+  { key: "wrist_left_cm", label: "مچ دست چپ", suffix: "سانتی‌متر" },
+  { key: "wrist_right_cm", label: "مچ دست راست", suffix: "سانتی‌متر" },
+  { key: "thigh_left_cm", label: "ران چپ", suffix: "سانتی‌متر" },
+  { key: "thigh_right_cm", label: "ران راست", suffix: "سانتی‌متر" },
+  { key: "calf_left_cm", label: "ساق چپ", suffix: "سانتی‌متر" },
+  { key: "calf_right_cm", label: "ساق راست", suffix: "سانتی‌متر" },
+  { key: "ankle_left_cm", label: "مچ پای چپ", suffix: "سانتی‌متر" },
+  { key: "ankle_right_cm", label: "مچ پای راست", suffix: "سانتی‌متر" },
+];
+
+function optionalNumber(value: string) {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseExtendedMeasurements(value?: string | null): ExtendedMeasurements {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .map(([key, item]) => [key, Number(item)] as const)
+        .filter(([, item]) => Number.isFinite(item)),
+    ) as ExtendedMeasurements;
+  } catch {
+    return {};
+  }
+}
+
+function serializeExtendedMeasurements(form: MeasurementForm) {
+  const entries = extendedMeasurementLabels
+    .map(({ key }) => [key, optionalNumber(form[key])] as const)
+    .filter(([, value]) => value !== undefined);
+  return entries.length ? JSON.stringify(Object.fromEntries(entries)) : undefined;
+}
+
+function useOutsideDismiss<T extends HTMLElement>(ref: RefObject<T | null>, open: boolean, onDismiss: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const handlePointer = (event: PointerEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) onDismiss();
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onDismiss();
+    };
+    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open, onDismiss, ref]);
+}
 
 function metricDisplay(value?: number) {
   if (value === undefined) return { text: "", isZero: false };
@@ -474,11 +634,10 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
     <>
       <PageHeader
         title="داشبورد روزانه"
-        subtitle={`امروز ${formatPersianDate()} است. این صفحه فقط کارهای عملیاتی روز را نشان می‌دهد؛ گزارش‌های مالی عمداً از داشبورد حذف شده‌اند.`}
-        action={<PrimaryButton icon={Plus} onClick={onNew}>مراجع جدید</PrimaryButton>}
+        subtitle={`امروز ${formatPersianDate()} است. این صفحه فقط کارهای عملیاتی روز را نشان می‌دهد و برای شروع سریع ویزیت طراحی شده است.`}
       />
 
-      <section className="daily-dashboard-grid">
+      <section className="daily-dashboard-grid motion-enter">
         <div className="card daily-hero p-6 md:p-7">
           <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -507,7 +666,7 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
         </div>
       </section>
 
-      <section className="mt-5 grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+      <section className="motion-enter motion-delay-1 mt-5 grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="card p-6">
           <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
@@ -535,7 +694,7 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
         </div>
       </section>
 
-      <section className="mt-5 grid gap-5 xl:grid-cols-2">
+      <section className="motion-enter motion-delay-2 mt-5 grid gap-5 xl:grid-cols-2">
         <div className="card p-6">
           <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-extrabold">مراجعین اخیر</h2><Users className="text-sage" size={22} /></div>
           {!stats ? <SkeletonRows /> : stats.recent_clients.length === 0 ? <EmptyState icon={Users} title="هنوز مراجعی ثبت نشده" text="اولین پرونده را بسازید؛ این بخش آخرین پرونده‌ها را نشان می‌دهد." /> : <div className="grid gap-3">{stats.recent_clients.slice(0, 4).map((client) => <ClientRow key={client.id} client={client} onEdit={() => onEdit(client)} />)}</div>}
@@ -562,8 +721,8 @@ function DashboardVisitRow({ visit }: { visit: DashboardStats["upcoming_visits"]
           <p className="font-bold">{visit.client_name}</p>
           <p className="mt-2 text-xs leading-6 text-warm-500">{formatPersianDate(visit.visit_date)}{visit.visit_time ? ` · ${visit.visit_time}` : ""} · {visitStatusLabels[visit.status] ?? visit.status}</p>
         </div>
-        <div className="numbers rounded-control bg-warm-50 px-3 py-2 text-sm font-semibold text-charcoal">
-          {formatNumber(Math.round(visit.total_fee))} تومان
+        <div className="rounded-control bg-warm-50 px-3 py-2 text-xs font-bold text-olive">
+          {visitTypeLabels[(visit.visit_type ?? "initial") as VisitType] ?? "ویزیت"}
         </div>
       </div>
     </div>
@@ -667,10 +826,12 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [visitServices, setVisitServices] = useState<Record<number, VisitService[]>>({});
   const [activeTab, setActiveTab] = useState<ProfileTab>(client ? "summary" : "base");
+  const [activeTrack, setActiveTrack] = useState<CareTrackType>("diet");
+  const [measurementTab, setMeasurementTab] = useState<"general" | "composition" | "regional">("general");
+  const [measurementForm, setMeasurementForm] = useState<MeasurementForm>({ ...emptyMeasurementForm });
   const [errors, setErrors] = useState<FieldErrors>({});
   const [topError, setTopError] = useState("");
-  const [catalogForm, setCatalogForm] = useState({ group_key: "diet" as ServiceGroup, name: "", default_price: 0, default_duration_minutes: "" });
-  const [serviceForm, setServiceForm] = useState({ visitId: "", catalogId: "", quantity: 1, price: 0, body_area: "", notes: "" });
+  const [serviceForm, setServiceForm] = useState({ groupKey: "diet" as ServiceGroup, visitId: "", catalogId: "", quantity: 1, price: 0, body_area: "", device_name: "", notes: "" });
   const [attachmentForm, setAttachmentForm] = useState({ category: "other" as AttachmentCategory, title: "", notes: "" });
   const [visitForm, setVisitForm] = useState({
     visit_date: todayIsoDate(),
@@ -702,6 +863,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       next_visit_time: "",
       next_visit_status: "scheduled",
     });
+    setMeasurementForm({ ...emptyMeasurementForm });
+    setMeasurementTab("general");
   };
 
   useEffect(() => {
@@ -758,11 +921,23 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: true }).then((items) => {
       setServiceCatalog(items);
       setServiceForm((current) => {
-        if (current.catalogId || !items[0]) return current;
-        return { ...current, catalogId: String(items[0].id ?? ""), price: items[0].default_price ?? 0 };
+        const preferred = items.find((item) => (item.group_key ?? "other") === current.groupKey) ?? items[0];
+        if (!preferred) return { ...current, catalogId: "" };
+        return {
+          ...current,
+          groupKey: (preferred.group_key ?? "other") as ServiceGroup,
+          catalogId: String(preferred.id ?? ""),
+          price: preferred.default_price ?? 0,
+        };
       });
     }).catch(() => setServiceCatalog([]));
   }, [client]);
+
+  useEffect(() => {
+    if (visitForm.visit_type === "body_analysis") setMeasurementTab("composition");
+    else if (visitForm.visit_type === "device") setMeasurementTab("regional");
+    else if (["initial", "diet_followup", "consultation"].includes(visitForm.visit_type)) setMeasurementTab("general");
+  }, [visitForm.visit_type]);
 
   const setField = <K extends keyof Client>(key: K, value: Client[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -782,11 +957,13 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
 
   const validateVisit = () => {
     const nextErrors: FieldErrors = {};
-    if (!isValidIsoDate(visitForm.visit_date)) nextErrors.visit_date = "تاریخ ویزیت باید با قالب yyyy/mm/dd وارد شود.";
+    const normalizedVisitDate = coerceDateToIso(visitForm.visit_date);
+    const normalizedNextDate = coerceDateToIso(visitForm.next_visit_date);
+    if (!normalizedVisitDate) nextErrors.visit_date = "یک تاریخ شمسی معتبر را از تقویم انتخاب کنید.";
     if (visitForm.visit_time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(visitForm.visit_time)) nextErrors.visit_time = "ساعت ویزیت باید با قالب HH:mm باشد.";
     if (!Number.isFinite(visitForm.weight_kg) || visitForm.weight_kg < 1 || visitForm.weight_kg > 400) nextErrors.weight_kg = "وزن ویزیت باید عددی بین ۱ تا ۴۰۰ کیلوگرم باشد.";
     if (!Number.isFinite(visitForm.height_cm) || visitForm.height_cm < 40 || visitForm.height_cm > 250) nextErrors.height_cm = "قد ویزیت باید عددی بین ۴۰ تا ۲۵۰ سانتی‌متر باشد.";
-    if (visitForm.next_visit_enabled && !isValidIsoDate(visitForm.next_visit_date)) nextErrors.next_visit_date = "برای مراجعه بعدی، تاریخ معتبر وارد کنید.";
+    if (visitForm.next_visit_enabled && !normalizedNextDate) nextErrors.next_visit_date = "برای مراجعه بعدی یک تاریخ شمسی معتبر انتخاب کنید.";
     if (visitForm.next_visit_enabled && visitForm.next_visit_time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(visitForm.next_visit_time)) nextErrors.next_visit_time = "ساعت بعدی باید با قالب HH:mm باشد.";
     setErrors(nextErrors);
     return nextErrors;
@@ -869,7 +1046,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       const detail = await invoke<VisitDetail>("save_visit_with_measurements", {
         visit: {
           client_id: client.id,
-          visit_date: visitForm.visit_date,
+          visit_date: coerceDateToIso(visitForm.visit_date),
           visit_time: visitForm.visit_time,
           status: visitForm.status,
           visit_type: visitForm.visit_type,
@@ -877,7 +1054,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           clinical_notes: visitForm.notes,
           private_notes: "",
           next_visit_enabled: visitForm.next_visit_enabled,
-          next_visit_date: visitForm.next_visit_enabled ? visitForm.next_visit_date : "",
+          next_visit_date: visitForm.next_visit_enabled ? coerceDateToIso(visitForm.next_visit_date) : "",
           next_visit_time: visitForm.next_visit_enabled ? visitForm.next_visit_time : "",
           next_visit_status: visitForm.next_visit_enabled ? visitForm.next_visit_status : "",
           total_fee: 0,
@@ -885,6 +1062,15 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         measurements: {
           weight_kg: visitForm.weight_kg,
           height_cm: visitForm.height_cm,
+          body_fat_percent: optionalNumber(measurementForm.body_fat_percent),
+          muscle_mass: optionalNumber(measurementForm.muscle_mass),
+          visceral_fat: optionalNumber(measurementForm.visceral_fat),
+          waist_cm: optionalNumber(measurementForm.waist_cm),
+          abdomen_cm: optionalNumber(measurementForm.abdomen_cm),
+          hip_cm: optionalNumber(measurementForm.hip_cm),
+          chest_cm: optionalNumber(measurementForm.chest_cm),
+          neck_cm: optionalNumber(measurementForm.neck_cm),
+          custom_measurements_json: serializeExtendedMeasurements(measurementForm),
           notes: visitForm.notes,
         },
       });
@@ -972,34 +1158,31 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     }
   };
 
-  const saveCatalogItem = async () => {
-    if (!catalogForm.name.trim()) {
-      toast("نام خدمت را وارد کنید.", "error");
-      return;
-    }
-    try {
-      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", {
-        item: {
-          group_key: catalogForm.group_key,
-          name: catalogForm.name.trim(),
-          default_price: catalogForm.default_price,
-          default_duration_minutes: catalogForm.default_duration_minutes ? Number(catalogForm.default_duration_minutes) : null,
-          body_area_required: false,
-          active: true,
-        },
-      });
-      setServiceCatalog((items) => [...items, saved]);
-      setServiceForm((current) => ({ ...current, catalogId: String(saved.id ?? ""), price: saved.default_price ?? 0 }));
-      setCatalogForm({ group_key: catalogForm.group_key, name: "", default_price: 0, default_duration_minutes: "" });
-      toast("خدمت ذخیره شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "ذخیره خدمت انجام نشد."), "error");
-    }
+
+  const filteredServiceCatalog = serviceCatalog.filter((item) => (item.group_key ?? "other") === serviceForm.groupKey && item.active !== false);
+  const selectedCatalogItem = serviceCatalog.find((entry) => String(entry.id ?? "") === serviceForm.catalogId);
+
+  const selectServiceGroup = (groupKey: ServiceGroup) => {
+    const first = serviceCatalog.find((item) => (item.group_key ?? "other") === groupKey && item.active !== false);
+    setServiceForm((current) => ({
+      ...current,
+      groupKey,
+      catalogId: first?.id ? String(first.id) : "",
+      price: first?.default_price ?? 0,
+      body_area: "",
+      device_name: "",
+    }));
   };
 
   const selectCatalogItem = (catalogId: string) => {
     const item = serviceCatalog.find((entry) => String(entry.id ?? "") === catalogId);
-    setServiceForm((current) => ({ ...current, catalogId, price: item?.default_price ?? current.price }));
+    setServiceForm((current) => ({
+      ...current,
+      catalogId,
+      groupKey: (item?.group_key ?? current.groupKey) as ServiceGroup,
+      price: item?.default_price ?? current.price,
+      body_area: item?.body_area_required ? current.body_area : "",
+    }));
   };
 
   const saveVisitService = async () => {
@@ -1019,7 +1202,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           service_name_snapshot: catalogItem.name,
           service_group_snapshot: catalogItem.group_key ?? "other",
           body_area: serviceForm.body_area,
-          device_name: "",
+          device_name: serviceForm.device_name,
           duration_minutes: catalogItem.default_duration_minutes ?? null,
           price,
           quantity,
@@ -1028,7 +1211,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         },
       });
       setVisitServices((current) => ({ ...current, [visitId]: [...(current[visitId] ?? []), saved] }));
-      setServiceForm((current) => ({ ...current, body_area: "", notes: "" }));
+      setServiceForm((current) => ({ ...current, body_area: "", device_name: "", notes: "" }));
       toast("خدمت برای ویزیت ثبت شد.");
     } catch (error) {
       toast(getErrorMessage(error, "ثبت خدمت انجام نشد."), "error");
@@ -1040,6 +1223,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const weightDelta = latestRecord && previousRecord ? latestRecord.weight_kg - previousRecord.weight_kg : null;
   const latestVisit = visits.length ? visits[visits.length - 1] : undefined;
   const latestBmi = latestRecord ? latestRecord.weight_kg / Math.pow(latestRecord.height_cm / 100, 2) : null;
+  const setMeasurementValue = (key: keyof MeasurementForm, value: string) => setMeasurementForm((current) => ({ ...current, [key]: value }));
 
   const baseInfo = (
     <div className="grid gap-5 md:grid-cols-2">
@@ -1093,48 +1277,93 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   );
 
   const visitsPanel = client?.id ? (
-    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
-        <div className="flex items-center gap-2">
-          <ClipboardList size={21} className="text-sage" />
-          <h2 className="text-lg font-bold">ثبت ویزیت</h2>
+    <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+      <div className="rounded-card border border-warm-100 bg-warm-50 p-5 motion-enter">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <ClipboardList size={21} className="text-sage" />
+            <h2 className="text-lg font-bold">ثبت ویزیت</h2>
+          </div>
+          <span className="pill-soft">{visitTypeLabels[visitForm.visit_type]}</span>
         </div>
-        <p className="helper mt-2">هر ویزیت می‌تواند اندازه‌گیری، یادداشت و مراجعه بعدی اختیاری داشته باشد.</p>
+        <p className="helper mt-2">ابتدا اطلاعات ضروری را ثبت کنید؛ اندازه‌گیری‌های تخصصی فقط در زیربخش مرتبط باز می‌شوند.</p>
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => { setVisitForm({ ...visitForm, visit_date: value }); setErrors((current) => ({ ...current, visit_date: undefined })); }} error={errors.visit_date} />
           <TimeField label="ساعت" value={visitForm.visit_time} onChange={(value) => { setVisitForm({ ...visitForm, visit_time: value }); setErrors((current) => ({ ...current, visit_time: undefined })); }} error={errors.visit_time} />
           <SelectField label="نوع ویزیت" value={visitForm.visit_type} onChange={(value) => setVisitForm({ ...visitForm, visit_type: value as VisitType })} options={visitTypeLabels} />
           <SelectField label="وضعیت" value={visitForm.status} onChange={(value) => setVisitForm({ ...visitForm, status: value })} options={{ completed: "انجام شد", scheduled: "برنامه‌ریزی شده", canceled: "لغو شد" }} />
           <TextField label="دلیل مراجعه" value={visitForm.reason} onChange={(value) => setVisitForm({ ...visitForm, reason: value })} />
+          <div />
           <NumberField label="وزن" value={visitForm.weight_kg} onChange={(value) => setVisitForm({ ...visitForm, weight_kg: value })} suffix="کیلوگرم" error={errors.weight_kg} />
           <NumberField label="قد" value={visitForm.height_cm} onChange={(value) => setVisitForm({ ...visitForm, height_cm: value })} suffix="سانتی‌متر" error={errors.height_cm} />
-          <div className="sm:col-span-2 rounded-control border border-warm-100 bg-white p-4">
-            <label className="flex items-center gap-2 text-sm font-semibold">
-              <input type="checkbox" checked={visitForm.next_visit_enabled} onChange={(event) => setVisitForm({ ...visitForm, next_visit_enabled: event.target.checked, next_visit_date: event.target.checked ? visitForm.next_visit_date || todayIsoDate() : "" })} />
-              مراجعه بعدی دارد؟
-            </label>
-            {visitForm.next_visit_enabled && (
-              <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                <DateField label="تاریخ بعدی" value={visitForm.next_visit_date || todayIsoDate()} onChange={(value) => { setVisitForm({ ...visitForm, next_visit_date: value }); setErrors((current) => ({ ...current, next_visit_date: undefined })); }} error={errors.next_visit_date} />
-                <TimeField label="ساعت" value={visitForm.next_visit_time} onChange={(value) => { setVisitForm({ ...visitForm, next_visit_time: value }); setErrors((current) => ({ ...current, next_visit_time: undefined })); }} error={errors.next_visit_time} />
-                <SelectField label="وضعیت" value={visitForm.next_visit_status} onChange={(value) => setVisitForm({ ...visitForm, next_visit_status: value })} options={{ scheduled: "برنامه‌ریزی شده", pending: "در انتظار", done: "انجام شد" }} />
-              </div>
-            )}
-          </div>
-          <div className="sm:col-span-2">
-            <label className="label">یادداشت ویزیت</label>
-            <textarea className="control mt-2 min-h-24 w-full py-3" value={visitForm.notes} onChange={(event) => setVisitForm({ ...visitForm, notes: event.target.value })} />
-          </div>
-          <div className="sm:col-span-2 nested-hint-card">
-            <strong>{visitTypeLabels[visitForm.visit_type]}</strong>
-            <span>{visitForm.visit_type === "diet_followup" ? "برای رژیم، وزن، پایبندی و هدف هفته بعد را ثبت کنید." : visitForm.visit_type === "body_analysis" ? "برای بادی آنالیز، فایل دستگاه و اندازه‌های بدن را در تب فایل‌ها/اندازه‌گیری‌ها اضافه کنید." : visitForm.visit_type === "device" ? "برای دستگاه، ناحیه بدن و خدمت مرتبط را در تب خدمات ثبت کنید." : "اطلاعات عمومی ویزیت ثبت می‌شود؛ جزئیات پیشرفته در تب‌های تو‌در‌تو قرار دارد."}</span>
-          </div>
         </div>
-        <div className="mt-5"><SecondaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</SecondaryButton></div>
+
+        <div className="mt-5 rounded-card border border-warm-100 bg-white p-4">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-bold">اندازه‌گیری‌های همین ویزیت</p>
+              <p className="helper mt-1">فقط داده‌های لازم را وارد کنید؛ فیلدهای خالی در گزارش نمایش داده نمی‌شوند.</p>
+            </div>
+            <Ruler size={22} className="text-sage" />
+          </div>
+          <div className="nested-tab-rail">
+            <button type="button" onClick={() => setMeasurementTab("general")} className={cn("nested-tab", measurementTab === "general" && "nested-tab-active")}>عمومی</button>
+            <button type="button" onClick={() => setMeasurementTab("composition")} className={cn("nested-tab", measurementTab === "composition" && "nested-tab-active")}>ترکیب بدن</button>
+            <button type="button" onClick={() => setMeasurementTab("regional")} className={cn("nested-tab", measurementTab === "regional" && "nested-tab-active")}>اندام و موضعی</button>
+          </div>
+          {measurementTab === "general" && (
+            <div className="measurement-grid mt-4">
+              <OptionalNumberField label="دور کمر" value={measurementForm.waist_cm} onChange={(value) => setMeasurementValue("waist_cm", value)} suffix="سانتی‌متر" />
+              <OptionalNumberField label="دور شکم" value={measurementForm.abdomen_cm} onChange={(value) => setMeasurementValue("abdomen_cm", value)} suffix="سانتی‌متر" />
+              <OptionalNumberField label="دور باسن" value={measurementForm.hip_cm} onChange={(value) => setMeasurementValue("hip_cm", value)} suffix="سانتی‌متر" />
+              <OptionalNumberField label="دور سینه" value={measurementForm.chest_cm} onChange={(value) => setMeasurementValue("chest_cm", value)} suffix="سانتی‌متر" />
+              <OptionalNumberField label="دور گردن" value={measurementForm.neck_cm} onChange={(value) => setMeasurementValue("neck_cm", value)} suffix="سانتی‌متر" />
+            </div>
+          )}
+          {measurementTab === "composition" && (
+            <div className="measurement-grid mt-4">
+              <OptionalNumberField label="درصد چربی" value={measurementForm.body_fat_percent} onChange={(value) => setMeasurementValue("body_fat_percent", value)} suffix="درصد" max={100} />
+              <OptionalNumberField label="توده عضله" value={measurementForm.muscle_mass} onChange={(value) => setMeasurementValue("muscle_mass", value)} suffix="کیلوگرم" />
+              <OptionalNumberField label="چربی احشایی" value={measurementForm.visceral_fat} onChange={(value) => setMeasurementValue("visceral_fat", value)} suffix="سطح" />
+              <OptionalNumberField label="آب بدن" value={measurementForm.body_water_percent} onChange={(value) => setMeasurementValue("body_water_percent", value)} suffix="درصد" max={100} />
+              <OptionalNumberField label="توده چربی" value={measurementForm.fat_mass_kg} onChange={(value) => setMeasurementValue("fat_mass_kg", value)} suffix="کیلوگرم" />
+              <OptionalNumberField label="درصد عضله" value={measurementForm.muscle_percent} onChange={(value) => setMeasurementValue("muscle_percent", value)} suffix="درصد" max={100} />
+              <OptionalNumberField label="سن متابولیک" value={measurementForm.metabolic_age} onChange={(value) => setMeasurementValue("metabolic_age", value)} suffix="سال" max={150} />
+              <OptionalNumberField label="امتیاز دستگاه" value={measurementForm.device_score} onChange={(value) => setMeasurementValue("device_score", value)} suffix="" />
+            </div>
+          )}
+          {measurementTab === "regional" && (
+            <div className="measurement-grid mt-4">
+              {extendedMeasurementLabels.filter(({ key }) => !["body_water_percent", "fat_mass_kg", "muscle_percent", "metabolic_age", "device_score"].includes(key)).map(({ key, label, suffix }) => (
+                <OptionalNumberField key={key} label={label} value={measurementForm[key]} onChange={(value) => setMeasurementValue(key, value)} suffix={suffix} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-5 rounded-control border border-warm-100 bg-white p-4">
+          <label className="flex items-center gap-2 text-sm font-semibold">
+            <input type="checkbox" checked={visitForm.next_visit_enabled} onChange={(event) => setVisitForm({ ...visitForm, next_visit_enabled: event.target.checked, next_visit_date: event.target.checked ? visitForm.next_visit_date || todayIsoDate() : "" })} />
+            مراجعه بعدی دارد؟
+          </label>
+          {visitForm.next_visit_enabled && (
+            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+              <DateField label="تاریخ بعدی" value={visitForm.next_visit_date || todayIsoDate()} onChange={(value) => { setVisitForm({ ...visitForm, next_visit_date: value }); setErrors((current) => ({ ...current, next_visit_date: undefined })); }} error={errors.next_visit_date} />
+              <TimeField label="ساعت" value={visitForm.next_visit_time} onChange={(value) => { setVisitForm({ ...visitForm, next_visit_time: value }); setErrors((current) => ({ ...current, next_visit_time: undefined })); }} error={errors.next_visit_time} />
+              <SelectField label="وضعیت" value={visitForm.next_visit_status} onChange={(value) => setVisitForm({ ...visitForm, next_visit_status: value })} options={{ scheduled: "برنامه‌ریزی شده", pending: "در انتظار", done: "انجام شد" }} />
+            </div>
+          )}
+        </div>
+        <div className="mt-4">
+          <label className="label">یادداشت ویزیت</label>
+          <textarea className="control mt-2 min-h-24 w-full py-3" value={visitForm.notes} onChange={(event) => setVisitForm({ ...visitForm, notes: event.target.value })} />
+        </div>
+        <div className="mt-5"><PrimaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</PrimaryButton></div>
       </div>
-      <div className="rounded-card border border-warm-100 bg-white p-5">
+
+      <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter motion-delay-1">
         <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2"><CalendarDays size={21} className="text-sage" /><h2 className="text-lg font-bold">ویزیت‌ها</h2></div>
+          <div className="flex items-center gap-2"><CalendarDays size={21} className="text-sage" /><h2 className="text-lg font-bold">تاریخچه ویزیت‌ها</h2></div>
           <span className="text-xs text-warm-500">{formatNumber(visits.length || records.length)} ویزیت</span>
         </div>
         {records.length === 0 ? <EmptyState icon={CalendarDays} title="هنوز ویزیتی ثبت نشده" text="اولین ویزیت را از فرم کنار صفحه ثبت کنید." /> : (
@@ -1143,22 +1372,25 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
             <div className="mt-5 grid gap-3">
               {visits.slice().reverse().map((item) => {
                 const services = item.visit.id ? visitServices[item.visit.id] ?? [] : [];
+                const extended = parseExtendedMeasurements(item.measurements?.custom_measurements_json);
+                const enteredMeasurements = [item.measurements?.body_fat_percent, item.measurements?.waist_cm, ...Object.values(extended)].filter((value) => value !== undefined && value !== null).length;
                 return (
-                  <div key={item.visit.id ?? item.visit.visit_date} className="rounded-control border border-warm-100 bg-warm-50 px-4 py-3">
+                  <div key={item.visit.id ?? item.visit.visit_date} className="visit-timeline-card">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">{formatPersianDate(item.visit.visit_date)}</span>
-                      <span className="numbers text-xs text-olive">{formatNumber(services.length)} خدمت</span>
-                    </div>
-                    {services.length > 0 && (
-                      <div className="mt-3 grid gap-2">
-                        {services.map((service) => (
-                          <div key={service.id ?? `${service.service_name_snapshot}-${service.total}`} className="flex flex-wrap items-center justify-between gap-2 rounded-control bg-white px-3 py-2 text-xs">
-                            <span className="font-semibold">{serviceGroupLabels[(service.service_group_snapshot ?? "other") as ServiceGroup] ?? "سایر"} · {service.service_name_snapshot}{service.body_area ? ` - ${service.body_area}` : ""}</span>
-                            <span className="numbers text-warm-500">{formatNumber(service.total)} تومان</span>
-                          </div>
-                        ))}
+                      <div>
+                        <span className="text-sm font-bold">{formatPersianDate(item.visit.visit_date)}</span>
+                        <span className="mr-2 text-xs text-warm-500">{visitTypeLabels[(item.visit.visit_type ?? "initial") as VisitType] ?? "ویزیت"}</span>
                       </div>
-                    )}
+                      <span className="pill-soft">{visitStatusLabels[item.visit.status] ?? item.visit.status}</span>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-warm-500">
+                      <span>{formatNumber(services.length)} خدمت</span>
+                      <span>·</span>
+                      <span>{formatNumber(enteredMeasurements)} شاخص تکمیلی</span>
+                      {item.measurements?.weight_kg ? <><span>·</span><span>{formatNumber(item.measurements.weight_kg, 1)} کیلوگرم</span></> : null}
+                    </div>
+                    {item.visit.clinical_notes && <p className="mt-3 text-xs leading-6 text-warm-500">{item.visit.clinical_notes}</p>}
+                    {services.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{services.map((service) => <span key={service.id ?? service.service_name_snapshot} className="service-mini-pill">{service.service_name_snapshot}</span>)}</div>}
                   </div>
                 );
               })}
@@ -1205,7 +1437,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
                   <span className="font-semibold">{attachment.title || attachment.file_name}</span>
                   <span className="text-xs text-olive">{attachmentCategoryLabels[attachment.category as AttachmentCategory] ?? attachment.category} · {attachment.attachment_date ? formatPersianDate(attachment.attachment_date) : ""}</span>
                 </div>
-                <p className="mt-2 truncate text-xs text-warm-500">{attachment.local_path}</p>
+                <p className="mt-2 truncate text-xs text-warm-500">{attachment.file_name}{attachment.notes ? ` · ${attachment.notes}` : ""}</p>
               </button>
             ))}
           </div>
@@ -1215,106 +1447,106 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   ) : null;
 
   const servicesPanel = client?.id ? (
-    <div className="grid gap-5 xl:grid-cols-[0.8fr_1.2fr]">
-      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
-        <div className="flex items-center gap-2">
-          <ClipboardList size={21} className="text-sage" />
-          <h2 className="text-lg font-bold">خدمات</h2>
-        </div>
+    <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+      <div className="rounded-card border border-warm-100 bg-warm-50 p-5 motion-enter">
+        <div className="flex items-center gap-2"><ClipboardList size={21} className="text-sage" /><h2 className="text-lg font-bold">ثبت خدمت برای ویزیت</h2></div>
+        <p className="helper mt-2">خدمات از بخش تنظیمات تعریف می‌شوند. اینجا ابتدا گروه و بعد آیتم همان گروه را انتخاب کنید.</p>
         <div className="mt-5 grid gap-4">
-          <SelectField label="گروه خدمت" value={catalogForm.group_key} onChange={(value) => setCatalogForm({ ...catalogForm, group_key: value as ServiceGroup })} options={serviceGroupLabels} />
-          <TextField label="نام خدمت جدید" value={catalogForm.name} onChange={(value) => setCatalogForm({ ...catalogForm, name: value })} />
-          <NumberField label="قیمت پیش‌فرض" value={catalogForm.default_price} onChange={(value) => setCatalogForm({ ...catalogForm, default_price: value })} suffix="تومان" />
-          <TextField label="مدت زمان پیش‌فرض" value={catalogForm.default_duration_minutes} onChange={(value) => setCatalogForm({ ...catalogForm, default_duration_minutes: value })} placeholder="دقیقه" />
-          <SecondaryButton icon={Plus} onClick={saveCatalogItem}>افزودن به کاتالوگ</SecondaryButton>
-        </div>
-      </div>
-      <div className="rounded-card border border-warm-100 bg-white p-5">
-        <h2 className="text-lg font-bold">ثبت خدمت برای ویزیت</h2>
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <SelectField label="ویزیت" value={serviceForm.visitId} onChange={(value) => setServiceForm({ ...serviceForm, visitId: value })} options={Object.fromEntries(visits.map((item) => [String(item.visit.id ?? ""), formatPersianDate(item.visit.visit_date)]))} />
-          <SelectField label="خدمت" value={serviceForm.catalogId} onChange={selectCatalogItem} options={Object.fromEntries(serviceCatalog.map((item) => [String(item.id ?? ""), `${serviceGroupLabels[(item.group_key ?? "other") as ServiceGroup] ?? "سایر"} · ${item.name}`]))} />
-          <NumberField label="تعداد" value={serviceForm.quantity} onChange={(value) => setServiceForm({ ...serviceForm, quantity: value })} suffix="عدد" />
-          <NumberField label="قیمت" value={serviceForm.price} onChange={(value) => setServiceForm({ ...serviceForm, price: value })} suffix="تومان" />
-          <TextField label="ناحیه بدن" value={serviceForm.body_area} onChange={(value) => setServiceForm({ ...serviceForm, body_area: value })} />
-          <TextField label="یادداشت" value={serviceForm.notes} onChange={(value) => setServiceForm({ ...serviceForm, notes: value })} />
-        </div>
-        <div className="mt-5"><SecondaryButton icon={Plus} onClick={saveVisitService}>ثبت خدمت</SecondaryButton></div>
-        <div className="mt-6 grid gap-4">
-          {serviceGroupKeys.map((group) => {
-            const items = serviceCatalog.filter((item) => (item.group_key ?? "other") === group);
-            if (!items.length) return null;
-            return (
-              <div key={group} className="service-group-card">
-                <div className="mb-3 flex items-center justify-between">
-                  <strong>{serviceGroupLabels[group]}</strong>
-                  <span className="numbers text-xs text-warm-500">{formatNumber(items.length)} خدمت</span>
-                </div>
-                <div className="grid gap-2">
-                  {items.map((item) => (
-                    <div key={item.id ?? item.name} className="flex flex-wrap items-center justify-between gap-2 rounded-control border border-warm-100 bg-warm-50 px-4 py-3 text-sm">
-                      <span className="font-semibold">{item.name}</span>
-                      <span className="numbers text-warm-500">{formatNumber(item.default_price)} تومان</span>
-                    </div>
-                  ))}
-                </div>
+          <SelectField label="ویزیت" value={serviceForm.visitId} onChange={(value) => setServiceForm({ ...serviceForm, visitId: value })} options={Object.fromEntries(visits.map((item) => [String(item.visit.id ?? ""), `${formatPersianDate(item.visit.visit_date)} · ${visitTypeLabels[(item.visit.visit_type ?? "initial") as VisitType] ?? "ویزیت"}`]))} />
+          <div>
+            <label className="label">گروه خدمت</label>
+            <div className="service-picker-grid mt-2">
+              {serviceGroupKeys.map((group) => (
+                <button key={group} type="button" onClick={() => selectServiceGroup(group)} className={cn("service-choice-card", serviceForm.groupKey === group && "service-choice-active")}>{serviceGroupLabels[group]}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="label">آیتم خدمت</label>
+            {filteredServiceCatalog.length === 0 ? (
+              <div className="mt-2 rounded-control border border-dashed border-warm-200 bg-white p-4 text-sm leading-7 text-warm-500">برای این گروه هنوز خدمتی تعریف نشده است. از «تنظیمات ← تعریف خدمات» آیتم اضافه کنید.</div>
+            ) : (
+              <div className="mt-2 grid gap-2">
+                {filteredServiceCatalog.map((item) => (
+                  <button key={item.id ?? item.name} type="button" onClick={() => selectCatalogItem(String(item.id ?? ""))} className={cn("service-item-select", serviceForm.catalogId === String(item.id ?? "") && "service-item-select-active")}>
+                    <span><strong>{item.name}</strong>{item.description && <small>{item.description}</small>}</span>
+                    <span className="numbers">{formatNumber(item.default_price)} تومان</span>
+                  </button>
+                ))}
               </div>
-            );
+            )}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <NumberField label="تعداد" value={serviceForm.quantity} onChange={(value) => setServiceForm({ ...serviceForm, quantity: value })} suffix="عدد" />
+            <NumberField label="قیمت هر واحد" value={serviceForm.price} onChange={(value) => setServiceForm({ ...serviceForm, price: value })} suffix="تومان" />
+            {(selectedCatalogItem?.body_area_required || serviceForm.groupKey === "device") && <TextField label="ناحیه بدن" value={serviceForm.body_area} onChange={(value) => setServiceForm({ ...serviceForm, body_area: value })} placeholder="مثلاً شکم، پهلو، ران" />}
+            {serviceForm.groupKey === "device" && <TextField label="نام دستگاه" value={serviceForm.device_name} onChange={(value) => setServiceForm({ ...serviceForm, device_name: value })} placeholder="اختیاری" />}
+            <div className="sm:col-span-2"><TextField label="یادداشت خدمت" value={serviceForm.notes} onChange={(value) => setServiceForm({ ...serviceForm, notes: value })} /></div>
+          </div>
+          <PrimaryButton icon={Plus} onClick={saveVisitService}>ثبت خدمت</PrimaryButton>
+        </div>
+      </div>
+      <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter motion-delay-1">
+        <div className="flex items-center justify-between gap-3"><h2 className="text-lg font-bold">خدمات ثبت‌شده</h2><span className="pill-soft">{formatNumber(Object.values(visitServices).flat().length)} مورد</span></div>
+        <div className="mt-5 grid gap-4">
+          {visits.slice().reverse().map((visit) => {
+            const items = visit.visit.id ? visitServices[visit.visit.id] ?? [] : [];
+            if (!items.length) return null;
+            return <div key={visit.visit.id} className="service-group-card"><div className="mb-3 flex items-center justify-between"><strong>{formatPersianDate(visit.visit.visit_date)}</strong><span className="text-xs text-warm-500">{visitTypeLabels[(visit.visit.visit_type ?? "initial") as VisitType]}</span></div><div className="grid gap-2">{items.map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-history-row"><span><strong>{item.service_name_snapshot}</strong><small>{serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup] ?? "سایر"}{item.body_area ? ` · ${item.body_area}` : ""}</small></span><span className="numbers">{formatNumber(item.total)} تومان</span></div>)}</div></div>;
           })}
+          {Object.values(visitServices).flat().length === 0 && <EmptyState icon={ClipboardList} title="خدمتی ثبت نشده" text="بعد از ثبت ویزیت، گروه و آیتم خدمت را از فرم کنار صفحه انتخاب کنید." />}
         </div>
       </div>
     </div>
   ) : null;
 
-  const tracksPanel = client?.id ? (
-    <div className="grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
-        <h2 className="text-lg font-bold">مسیرهای مراقبت</h2>
-        <p className="helper mt-2">هر مراجع می‌تواند یک یا چند مسیر داشته باشد. این نسخه مسیر را از هدف و نوع خدمات ثبت‌شده خلاصه می‌کند تا فرم سنگین نشود.</p>
-        <div className="mt-5 grid gap-3">
-          {newClientStartOptions.filter((option) => option.key !== "initial").map((option) => (
-            <div key={option.key} className="care-track-card">
-              <strong>{option.title}</strong>
-              <span>{option.description}</span>
-            </div>
-          ))}
+  const tracksPanel = client?.id ? (() => {
+    const allowedVisits = visits.filter((item) => trackVisitTypes[activeTrack].includes((item.visit.visit_type ?? "initial") as VisitType));
+    const allowedServices = Object.values(visitServices).flat().filter((item) => trackServiceGroups[activeTrack].includes((item.service_group_snapshot ?? "other") as ServiceGroup));
+    const allowedFiles = attachments.filter((item) => trackAttachmentCategories[activeTrack].includes(item.category as AttachmentCategory));
+    const startVisit = () => {
+      const nextType: Record<CareTrackType, VisitType> = { diet: "diet_followup", body_analysis: "body_analysis", device: "device", consultation: "consultation", combined: "combined" };
+      setVisitForm((current) => ({ ...current, visit_type: nextType[activeTrack], reason: careTrackLabels[activeTrack] }));
+      setActiveTab("visits");
+    };
+    return (
+      <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between"><div><h2 className="text-lg font-bold">مسیرهای مراقبت</h2><p className="helper mt-2">هر مسیر نمای مستقل و سبک خودش را دارد؛ فقط ویزیت‌ها، خدمات و فایل‌های مرتبط نمایش داده می‌شوند.</p></div><Target className="text-sage" size={24} /></div>
+        <div className="care-track-tabs mt-5">
+          {careTrackKeys.map((track) => <button key={track} type="button" onClick={() => setActiveTrack(track)} className={cn("care-track-tab", activeTrack === track && "care-track-tab-active")}><strong>{careTrackLabels[track]}</strong><small>{careTrackDescriptions[track]}</small></button>)}
+        </div>
+        <div className="mt-5 rounded-card border border-warm-100 bg-warm-50 p-5">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between"><div><span className="pill-soft">مسیر فعال</span><h3 className="mt-3 text-2xl font-extrabold">{careTrackLabels[activeTrack]}</h3><p className="helper mt-2">{careTrackDescriptions[activeTrack]}</p></div><PrimaryButton icon={Plus} onClick={startVisit}>شروع ویزیت این مسیر</PrimaryButton></div>
+          <div className="mt-5 grid gap-4 md:grid-cols-3">
+            <ResultCard title="ویزیت مرتبط" value={formatNumber(allowedVisits.length)} unit="جلسه" text={allowedVisits.length ? formatPersianDate(allowedVisits[allowedVisits.length - 1].visit.visit_date) : "هنوز ثبت نشده"} featured />
+            <ResultCard title="خدمات" value={formatNumber(allowedServices.length)} unit="خدمت" text="آیتم‌های مرتبط با همین مسیر" />
+            <ResultCard title="فایل‌ها" value={formatNumber(allowedFiles.length)} unit="فایل" text="اسناد و تصاویر مرتبط" />
+          </div>
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="nested-summary-box"><h4>آخرین فعالیت‌ها</h4>{allowedVisits.length ? allowedVisits.slice(-3).reverse().map((item) => <div key={item.visit.id ?? item.visit.visit_date} className="nested-summary-row"><span>{formatPersianDate(item.visit.visit_date)}</span><strong>{visitTypeLabels[(item.visit.visit_type ?? "initial") as VisitType]}</strong></div>) : <p className="helper mt-3">هنوز ویزیتی در این مسیر ثبت نشده است.</p>}</div>
+            <div className="nested-summary-box"><h4>فایل‌های مرتبط</h4>{allowedFiles.length ? allowedFiles.slice(0, 3).map((item) => <button type="button" key={item.id ?? item.file_name} onClick={() => openAttachment(item)} className="nested-summary-row w-full"><span>{attachmentCategoryLabels[item.category as AttachmentCategory] ?? "سایر"}</span><strong>{item.title || item.file_name}</strong></button>) : <p className="helper mt-3">فایلی در این مسیر ثبت نشده است.</p>}</div>
+          </div>
         </div>
       </div>
-      <div className="rounded-card border border-warm-100 bg-white p-5">
-        <h2 className="text-lg font-bold">مسیر فعال فعلی</h2>
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          <ResultCard title="هدف اصلی" value={goalLabels[form.goal]} unit="" text="در اطلاعات پایه قابل تغییر است." />
-          <ResultCard title="خدمات ثبت‌شده" value={formatNumber(Object.values(visitServices).flat().length)} unit="خدمت" text="از تب خدمات به ویزیت‌ها وصل می‌شود." />
-          <ResultCard title="فایل‌های پرونده" value={formatNumber(attachments.length)} unit="فایل" text="آزمایش، بادی آنالیز، رژیم، دستگاه و سایر." />
-          <ResultCard title="ویزیت‌ها" value={formatNumber(visits.length)} unit="جلسه" text="تاریخچه زمانی مراقبت." featured />
-        </div>
-      </div>
-    </div>
-  ) : null;
+    );
+  })() : null;
 
-  const measurementsPanel = client?.id ? (
-    <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
-      <div className="rounded-card border border-warm-100 bg-white p-5">
-        <h2 className="text-lg font-bold">اندازه‌گیری‌های عمومی</h2>
-        <p className="helper mt-2">وزن، BMI و دورهای بدن از ویزیت‌ها ساخته می‌شوند. برای هر ویزیت داده لازم را ثبت کنید.</p>
-        <div className="mt-5">
-          {records.length === 0 ? <EmptyState icon={ClipboardList} title="اندازه‌گیری ثبت نشده" text="اولین ویزیت را ثبت کنید تا روندها اینجا ساخته شوند." /> : <WeightHistory records={records} />}
-        </div>
+  const measurementsPanel = client?.id ? (() => {
+    const latestWithMeasurements = [...visits].reverse().find((item) => item.measurements);
+    const m = latestWithMeasurements?.measurements;
+    const ext = parseExtendedMeasurements(m?.custom_measurements_json);
+    const displayRows: Array<{ label: string; value?: number; suffix: string }> = [
+      { label: "وزن", value: m?.weight_kg, suffix: "کیلوگرم" }, { label: "درصد چربی", value: m?.body_fat_percent, suffix: "درصد" }, { label: "توده عضله", value: m?.muscle_mass, suffix: "کیلوگرم" }, { label: "چربی احشایی", value: m?.visceral_fat, suffix: "" },
+      { label: "دور کمر", value: m?.waist_cm, suffix: "سانتی‌متر" }, { label: "دور شکم", value: m?.abdomen_cm, suffix: "سانتی‌متر" }, { label: "دور باسن", value: m?.hip_cm, suffix: "سانتی‌متر" }, { label: "دور سینه", value: m?.chest_cm, suffix: "سانتی‌متر" }, { label: "دور گردن", value: m?.neck_cm, suffix: "سانتی‌متر" },
+      ...extendedMeasurementLabels.map(({ key, label, suffix }) => ({ label, value: ext[key], suffix })),
+    ].filter((row) => row.value !== undefined && row.value !== null);
+    return (
+      <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
+        <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter"><h2 className="text-lg font-bold">روند وزن</h2><p className="helper mt-2">روند زمانی وزن از ویزیت‌های ثبت‌شده ساخته می‌شود.</p><div className="mt-5">{records.length === 0 ? <EmptyState icon={ClipboardList} title="اندازه‌گیری ثبت نشده" text="اولین ویزیت را ثبت کنید تا روندها ساخته شوند." /> : <WeightHistory records={records} />}</div></div>
+        <div className="rounded-card border border-warm-100 bg-warm-50 p-5 motion-enter motion-delay-1"><div className="flex items-center justify-between"><div><h2 className="text-lg font-bold">آخرین اندازه‌گیری کامل</h2><p className="helper mt-2">مقادیر عمومی، ترکیب بدن و اندام‌های چپ/راست.</p></div><Activity className="text-sage" size={24} /></div>{displayRows.length ? <div className="measurement-overview mt-5">{displayRows.map((row) => <div key={row.label}><span>{row.label}</span><strong className="numbers">{formatNumber(row.value!, 1)} <small>{row.suffix}</small></strong></div>)}</div> : <div className="mt-5"><EmptyState icon={Ruler} title="داده تکمیلی ثبت نشده" text="در تب ویزیت‌ها، زیربخش اندازه‌گیری عمومی، ترکیب بدن یا اندام و موضعی را تکمیل کنید." /></div>}</div>
       </div>
-      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
-        <h2 className="text-lg font-bold">بادی آنالیز و دستگاه</h2>
-        <p className="helper mt-2">پرینت دستگاه، عکس‌ها و گزارش ترکیب بدن را از تب فایل‌ها با دسته «بادی آنالیز» یا «دستگاه» بارگذاری کنید.</p>
-        <div className="mt-5 grid gap-3">
-          {attachmentCategoryKeys.filter((key) => ["body_analysis", "device", "before_after"].includes(key)).map((key) => (
-            <div key={key} className="care-track-card">
-              <strong>{attachmentCategoryLabels[key]}</strong>
-              <span>{formatNumber(attachments.filter((item) => item.category === key).length)} فایل ثبت‌شده</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  ) : null;
+    );
+  })() : null;
 
   const nutritionPanel = client?.id ? (
     <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
@@ -1391,167 +1623,15 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   );
 }
 
-function ClientForm({ client, onBack, onSaved, toast }: { client: Client | null; onBack: () => void; onSaved: (client: Client) => void; toast: ToastFn }) {
-  const [form, setForm] = useState<Client>(client ?? emptyClient);
-  const [records, setRecords] = useState<ClientRecord[]>([]);
-  const [recordForm, setRecordForm] = useState({
-    record_date: todayIsoDate(),
-    weight_kg: client?.weight_kg ?? emptyClient.weight_kg,
-    height_cm: client?.height_cm ?? emptyClient.height_cm,
-    notes: "",
-  });
-  useEffect(() => setForm(client ?? emptyClient), [client]);
-  useEffect(() => {
-    setRecordForm({
-      record_date: todayIsoDate(),
-      weight_kg: client?.weight_kg ?? emptyClient.weight_kg,
-      height_cm: client?.height_cm ?? emptyClient.height_cm,
-      notes: "",
-    });
-    if (!client?.id || !isDesktopRuntime()) {
-      setRecords([]);
-      return;
-    }
-    invoke<ClientRecord[]>("list_client_records", { clientId: client.id })
-      .then(setRecords)
-      .catch(() => setRecords([]));
-  }, [client]);
-
-  const setField = <K extends keyof Client>(key: K, value: Client[K]) => setForm((current) => ({ ...current, [key]: value }));
-  const chooseProfileImage = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] }],
-      });
-      if (!selected || Array.isArray(selected)) return;
-      const imported = isDesktopRuntime()
-        ? await invoke<string>("import_brand_asset", { path: selected, kind: "client-profile" })
-        : selected;
-      setField("profile_image_path", imported);
-      toast("عکس پروفایل انتخاب شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "انتخاب عکس انجام نشد."), "error");
-    }
-  };
-  const save = async () => {
-    if (!form.full_name.trim()) {
-      toast("نام مراجع را وارد کنید.", "error");
-      return;
-    }
-    try {
-      const saved = await invoke<Client>("save_client", { client: form });
-      if (!client && saved.id) {
-        await invoke<ClientRecord>("save_client_record", {
-          record: {
-            client_id: saved.id,
-            record_date: todayIsoDate(),
-            weight_kg: saved.weight_kg,
-            height_cm: saved.height_cm,
-            notes: "ثبت اولیه مراجع",
-          },
-        });
-      }
-      onSaved(saved);
-      toast(client ? "پرونده ذخیره شد." : "مراجع جدید ثبت شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "ذخیره انجام نشد."), "error");
-    }
-  };
-
-  const saveRecord = async () => {
-    if (!client?.id) {
-      toast("اول پرونده مراجع را ذخیره کنید.", "error");
-      return;
-    }
-    try {
-      const record = await invoke<ClientRecord>("save_client_record", {
-        record: {
-          client_id: client.id,
-          record_date: recordForm.record_date,
-          weight_kg: recordForm.weight_kg,
-          height_cm: recordForm.height_cm,
-          notes: recordForm.notes,
-        },
-      });
-      setRecords((items) => [...items, record].sort((a, b) => a.record_date.localeCompare(b.record_date)));
-      const updatedClient = { ...form, weight_kg: record.weight_kg, height_cm: record.height_cm };
-      setForm(updatedClient);
-      await invoke<Client>("save_client", { client: updatedClient });
-      setRecordForm({ record_date: todayIsoDate(), weight_kg: record.weight_kg, height_cm: record.height_cm, notes: "" });
-      toast("رکورد ویزیت ثبت شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "ثبت رکورد انجام نشد."), "error");
-    }
-  };
-
-  return (
-    <>
-      <PageHeader title={client ? "پرونده مراجع" : "مراجع جدید"} subtitle={client ? "اطلاعات، یادداشت‌ها و روند تغییرات مراجع را یکجا ببینید." : "اطلاعات پایه برای محاسبه انرژی و پیگیری ویزیت را وارد کنید."} action={<PrimaryButton icon={Save} onClick={save}>ذخیره پرونده</PrimaryButton>} />
-      <section className="card p-6">
-        <div className="grid gap-5 md:grid-cols-2">
-          <div className="md:col-span-2 flex flex-col gap-4 rounded-card border border-warm-100 bg-warm-50 p-4 sm:flex-row sm:items-center">
-            <ProfileAvatar client={form} size="lg" />
-            <div className="flex-1">
-              <p className="text-sm font-bold">عکس پروفایل مراجع</p>
-              <p className="helper mt-1">برای شناسایی سریع‌تر در پرونده و لیست مراجعین.</p>
-            </div>
-            <SecondaryButton icon={Camera} onClick={chooseProfileImage}>انتخاب عکس</SecondaryButton>
-          </div>
-          <TextField label="نام کامل" value={form.full_name} onChange={(value) => setField("full_name", value)} />
-          <TextField label="شماره تماس" value={form.phone} onChange={(value) => setField("phone", value)} placeholder="مثلا 09123456789" />
-          <TextField label="ایمیل" value={form.email} onChange={(value) => setField("email", value)} placeholder="name@example.com" />
-          <SelectField label="جنسیت" value={form.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
-          <NumberField label="سن" value={form.age} onChange={(value) => setField("age", value)} suffix="سال" />
-          <NumberField label="قد" value={form.height_cm} onChange={(value) => setField("height_cm", value)} suffix="سانتی‌متر" />
-          <NumberField label="وزن" value={form.weight_kg} onChange={(value) => setField("weight_kg", value)} suffix="کیلوگرم" />
-          <SelectField label="سطح فعالیت" value={form.activity_level} onChange={(value) => setField("activity_level", value as ActivityLevel)} options={activityLabels} />
-          <SelectField label="هدف" value={form.goal} onChange={(value) => setField("goal", value as Goal)} options={goalLabels} />
-          <div className="md:col-span-2">
-            <label className="label">یادداشت پرونده</label>
-            <textarea className="control mt-2 min-h-32 w-full py-3" value={form.notes} onChange={(event) => setField("notes", event.target.value)} />
-          </div>
-        </div>
-        {client?.id && (
-          <div className="mt-6 grid gap-5 xl:grid-cols-[0.9fr_1.1fr]">
-            <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
-              <div className="flex items-center gap-2">
-                <ClipboardList size={21} className="text-sage" />
-                <h2 className="text-lg font-bold">رکورد ویزیت امروز</h2>
-              </div>
-              <p className="helper mt-2">هر مراجعه جدید را با تاریخ خودش ثبت کنید تا روند وزن قابل پیگیری شود.</p>
-              <div className="mt-5 grid gap-4 sm:grid-cols-2">
-                <DateField label="تاریخ" value={recordForm.record_date} onChange={(value) => setRecordForm({ ...recordForm, record_date: value })} />
-                <NumberField label="وزن" value={recordForm.weight_kg} onChange={(value) => setRecordForm({ ...recordForm, weight_kg: value })} suffix="کیلوگرم" />
-                <NumberField label="قد" value={recordForm.height_cm} onChange={(value) => setRecordForm({ ...recordForm, height_cm: value })} suffix="سانتی‌متر" />
-                <div className="sm:col-span-2">
-                  <label className="label">یادداشت ویزیت</label>
-                  <textarea className="control mt-2 min-h-24 w-full py-3" value={recordForm.notes} onChange={(event) => setRecordForm({ ...recordForm, notes: event.target.value })} />
-                </div>
-              </div>
-              <div className="mt-5"><SecondaryButton icon={Plus} onClick={saveRecord}>ثبت رکورد</SecondaryButton></div>
-            </div>
-            <div className="rounded-card border border-warm-100 bg-white p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2"><TrendingUp size={21} className="text-sage" /><h2 className="text-lg font-bold">روند وزن</h2></div>
-                <span className="text-xs text-warm-500">{formatNumber(records.length)} رکورد</span>
-              </div>
-              {records.length === 0 ? <EmptyState icon={CalendarDays} title="هنوز رکوردی ثبت نشده" text="اولین ویزیت را از فرم کنار صفحه ثبت کنید." /> : <WeightHistory records={records} />}
-            </div>
-          </div>
-        )}
-        <div className="mt-6"><SecondaryButton onClick={onBack}>بازگشت به فهرست</SecondaryButton></div>
-      </section>
-    </>
-  );
-}
-
 function CalculatorScreen({ initialClient, settings, toast }: { initialClient: Client | null; settings: Settings; toast: ToastFn }) {
   const [selected, setSelected] = useState<Client | null>(initialClient);
   const [input, setInput] = useState<Client>(initialClient ?? emptyClient);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Client[]>([]);
-  const [overrides, setOverrides] = useState({ calories: "", protein: "", carbs: "", fat: "" });
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const [overrides, setOverrides] = useState({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
+  useOutsideDismiss(searchRef, searchOpen, () => setSearchOpen(false));
 
   useEffect(() => {
     setSelected(initialClient);
@@ -1563,45 +1643,52 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
       setResults([]);
       return;
     }
-    const timer = window.setTimeout(() => invoke<Client[]>("search_clients", { query }).then(setResults).catch(() => setResults([])), 150);
+    const timer = window.setTimeout(() => invoke<Client[]>("search_clients", { query }).then((items) => { setResults(items); setSearchOpen(true); }).catch(() => setResults([])), 150);
     return () => window.clearTimeout(timer);
   }, [query]);
 
   const calc = calculateNutrition(input, settings);
-  const calories = Number(overrides.calories) || calc.targetCalories;
-  const protein = Number(overrides.protein) || (calories * (calc.proteinPercent / 100)) / 4;
-  const carbs = Number(overrides.carbs) || (calories * (calc.carbsPercent / 100)) / 4;
-  const fat = Number(overrides.fat) || (calories * (calc.fatPercent / 100)) / 9;
+  const calorieAdjustmentPercent = Number(overrides.calorieAdjustmentPercent) || 0;
+  const calories = Math.max(0, calc.targetCalories * (1 + calorieAdjustmentPercent / 100));
+  const proteinPercent = overrides.proteinPercent === "" ? calc.proteinPercent : Number(overrides.proteinPercent);
+  const carbsPercent = overrides.carbsPercent === "" ? calc.carbsPercent : Number(overrides.carbsPercent);
+  const fatPercent = overrides.fatPercent === "" ? calc.fatPercent : Number(overrides.fatPercent);
+  const macroTotal = proteinPercent + carbsPercent + fatPercent;
+  const protein = (calories * (proteinPercent / 100)) / 4;
+  const carbs = (calories * (carbsPercent / 100)) / 4;
+  const fat = (calories * (fatPercent / 100)) / 9;
   const setField = <K extends keyof Client>(key: K, value: Client[K]) => setInput((current) => ({ ...current, [key]: value }));
   const choose = (client: Client) => {
     setSelected(client);
     setInput(client);
     setQuery("");
     setResults([]);
+    setSearchOpen(false);
     toast("اطلاعات مراجع در محاسبات تغذیه قرار گرفت.");
   };
   const clear = () => {
     setSelected(null);
-    setInput(emptyClient);
+    setInput({ ...emptyClient });
     setQuery("");
-    setOverrides({ calories: "", protein: "", carbs: "", fat: "" });
+    setSearchOpen(false);
+    setOverrides({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
   };
 
   return (
     <>
-      <PageHeader title="محاسبات تغذیه" subtitle="انتخاب مراجع ذخیره‌شده یا ورود دستی؛ همه نتایج در لحظه به‌روزرسانی می‌شوند." />
+      <PageHeader title="محاسبات تغذیه" subtitle="مراجع ذخیره‌شده را انتخاب کنید یا داده‌ها را دستی وارد کنید؛ اصلاح دستی بر اساس درصد انجام می‌شود." />
       <div className="grid gap-5 xl:grid-cols-[430px_1fr]">
-        <section className="card p-6">
+        <section className="card p-6 motion-enter">
           <div className="mb-5 flex items-center justify-between gap-3">
             <div><h2 className="text-xl font-bold">ورودی‌ها</h2><p className="helper mt-1">{selected ? `مراجع انتخاب‌شده: ${selected.full_name}` : "حالت ورود دستی فعال است."}</p></div>
             {selected && <SecondaryButton icon={RotateCcw} onClick={clear}>ورود دستی</SecondaryButton>}
           </div>
-          <div className="relative mb-5">
+          <div ref={searchRef} className="relative mb-5">
             <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={20} />
-            <input className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی مراجع ذخیره‌شده" />
-            {results.length > 0 && (
-              <div className="absolute z-10 mt-2 max-h-72 w-full overflow-auto rounded-card border border-warm-100 bg-paper p-2 shadow-soft">
-                {results.map((client) => <button key={client.id} onClick={() => choose(client)} className="soft-transition flex w-full items-center justify-between rounded-control px-3 py-3 text-right hover:bg-warm-50"><span className="font-semibold">{client.full_name}</span><span className="text-xs text-warm-500">{goalLabels[client.goal]}</span></button>)}
+            <input className="control w-full pr-12" value={query} onFocus={() => results.length > 0 && setSearchOpen(true)} onChange={(event) => { setQuery(event.target.value); setSearchOpen(Boolean(event.target.value)); }} placeholder="جست‌وجوی مراجع ذخیره‌شده" />
+            {searchOpen && results.length > 0 && (
+              <div className="popover-panel absolute z-30 mt-2 max-h-72 w-full overflow-auto p-2">
+                {results.map((client) => <button type="button" key={client.id} onClick={() => choose(client)} className="soft-transition flex w-full items-center justify-between rounded-control px-3 py-3 text-right hover:bg-warm-50"><span className="font-semibold">{client.full_name}</span><span className="text-xs text-warm-500">{goalLabels[client.goal]}</span></button>)}
               </div>
             )}
           </div>
@@ -1614,26 +1701,26 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
             <SelectField label="هدف" value={input.goal} onChange={(value) => setField("goal", value as Goal)} options={goalLabels} />
           </div>
           <div className="mt-6 rounded-card bg-warm-50 p-4">
-            <p className="text-sm font-bold">اصلاح دستی</p>
-            <p className="helper mt-1">کالری یا گرم هر ماکرو را آزادانه تغییر دهید.</p>
+            <div className="flex items-center justify-between gap-3"><div><p className="text-sm font-bold">اصلاح دستی درصدی</p><p className="helper mt-1">کالری را درصدی کم/زیاد کنید و سهم ماکروها را با درصد تنظیم کنید.</p></div><span className={cn("macro-total", Math.abs(macroTotal - 100) < 0.01 ? "macro-total-ok" : "macro-total-warning")}>جمع: {formatNumber(macroTotal)}٪</span></div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <OverrideField label="کالری هدف" value={overrides.calories} onChange={(value) => setOverrides({ ...overrides, calories: value })} />
-              <OverrideField label="پروتئین" value={overrides.protein} onChange={(value) => setOverrides({ ...overrides, protein: value })} />
-              <OverrideField label="کربوهیدرات" value={overrides.carbs} onChange={(value) => setOverrides({ ...overrides, carbs: value })} />
-              <OverrideField label="چربی" value={overrides.fat} onChange={(value) => setOverrides({ ...overrides, fat: value })} />
+              <OverrideField label="تغییر کالری هدف" value={overrides.calorieAdjustmentPercent} onChange={(value) => setOverrides({ ...overrides, calorieAdjustmentPercent: value })} suffix="درصد" allowNegative />
+              <OverrideField label="پروتئین" value={overrides.proteinPercent} onChange={(value) => setOverrides({ ...overrides, proteinPercent: value })} suffix="درصد" />
+              <OverrideField label="کربوهیدرات" value={overrides.carbsPercent} onChange={(value) => setOverrides({ ...overrides, carbsPercent: value })} suffix="درصد" />
+              <OverrideField label="چربی" value={overrides.fatPercent} onChange={(value) => setOverrides({ ...overrides, fatPercent: value })} suffix="درصد" />
             </div>
+            {Math.abs(macroTotal - 100) >= 0.01 && <p className="mt-3 text-xs font-semibold text-amber-700">جمع درصد ماکروها باید ۱۰۰٪ باشد.</p>}
           </div>
         </section>
-        <section className="grid content-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <section className="grid content-start gap-4 sm:grid-cols-2 xl:grid-cols-3 motion-enter motion-delay-1">
           <ResultCard title="BMI" value={formatNumber(calc.bmi, 1)} unit={bmiCategory(calc.bmi)} text="نمای سریع وضعیت وزنی بر اساس قد و وزن." />
           <ResultCard title="IBW" value={formatNumber(calc.ibw, 1)} unit="کیلوگرم" text="وزن ایده‌آل بر اساس ضریب BMI تنظیمات." />
           <ResultCard title="ABW" value={formatNumber(calc.abw, 1)} unit="کیلوگرم" text="وزن تعدیل‌شده برای محاسبه انرژی پایه." />
           <ResultCard title="BMR" value={formatNumber(calc.bmr)} unit="کیلوکالری" text="انرژی پایه بر اساس ABW و ضرایب تنظیمات." />
           <ResultCard title="TEE" value={formatNumber(calc.tee)} unit="کیلوکالری" text="نیاز انرژی روزانه با سطح فعالیت." />
-          <ResultCard title="کالری هدف" value={formatNumber(calories)} unit="کیلوکالری" text="بر اساس هدف وزن و قابل اصلاح دستی." featured />
-          <ResultCard title="پروتئین" value={formatNumber(protein)} unit="گرم" text={`${formatNumber(calc.proteinPercent)}٪ از کالری هدف.`} />
-          <ResultCard title="کربوهیدرات" value={formatNumber(carbs)} unit="گرم" text={`${formatNumber(calc.carbsPercent)}٪ از کالری هدف.`} />
-          <ResultCard title="چربی" value={formatNumber(fat)} unit="گرم" text={`${formatNumber(calc.fatPercent)}٪ از کالری هدف.`} />
+          <ResultCard title="کالری هدف" value={formatNumber(calories)} unit="کیلوکالری" text={calorieAdjustmentPercent ? `${formatNumber(calorieAdjustmentPercent)}٪ اصلاح دستی اعمال شده.` : "بر اساس هدف وزن."} featured />
+          <ResultCard title="پروتئین" value={formatNumber(protein)} unit="گرم" text={`${formatNumber(proteinPercent)}٪ از کالری هدف.`} />
+          <ResultCard title="کربوهیدرات" value={formatNumber(carbs)} unit="گرم" text={`${formatNumber(carbsPercent)}٪ از کالری هدف.`} />
+          <ResultCard title="چربی" value={formatNumber(fat)} unit="گرم" text={`${formatNumber(fatPercent)}٪ از کالری هدف.`} />
         </section>
       </div>
     </>
@@ -1643,7 +1730,18 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
 function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; setSettings: (settings: Settings) => void; toast: ToastFn }) {
   const [form, setForm] = useState(settings);
   const [credentials, setCredentials] = useState({ current_password: "", username: settings.username || "admin", password: "", repeat: "" });
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
+  const [serviceEditor, setServiceEditor] = useState<ServiceCatalogItem>({ ...emptyServiceEditor });
+  const [serviceLoading, setServiceLoading] = useState(false);
   useEffect(() => setForm(settings), [settings]);
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    setServiceLoading(true);
+    invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false })
+      .then(setServiceCatalog)
+      .catch((error) => toast(getErrorMessage(error, "فهرست خدمات خوانده نشد."), "error"))
+      .finally(() => setServiceLoading(false));
+  }, [toast]);
 
   const save = async () => {
     try {
@@ -1727,6 +1825,49 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
   };
   const setCalcSetting = (key: CalcSettingKey, value: number) => {
     setForm((current) => ({ ...current, [key]: Number.isFinite(value) ? value : defaultCalculationSettings[key] }));
+  };
+  const resetServiceEditor = (group: ServiceGroup = (serviceEditor.group_key ?? "diet") as ServiceGroup) => setServiceEditor({ ...emptyServiceEditor, group_key: group });
+  const saveServiceDefinition = async () => {
+    if (!serviceEditor.name.trim()) {
+      toast("نام خدمت را وارد کنید.", "error");
+      return;
+    }
+    try {
+      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", {
+        item: {
+          ...serviceEditor,
+          group_key: serviceEditor.group_key ?? "other",
+          name: serviceEditor.name.trim(),
+          description: serviceEditor.description?.trim() ?? "",
+          default_price: Number(serviceEditor.default_price) || 0,
+          default_duration_minutes: serviceEditor.default_duration_minutes ? Number(serviceEditor.default_duration_minutes) : null,
+          body_area_required: Boolean(serviceEditor.body_area_required),
+          active: serviceEditor.active !== false,
+        },
+      });
+      setServiceCatalog((items) => {
+        const index = items.findIndex((item) => item.id === saved.id);
+        if (index < 0) return [...items, saved];
+        const next = [...items];
+        next[index] = saved;
+        return next;
+      });
+      resetServiceEditor((saved.group_key ?? "diet") as ServiceGroup);
+      toast(serviceEditor.id ? "خدمت ویرایش شد." : "خدمت جدید اضافه شد.");
+    } catch (error) {
+      toast(getErrorMessage(error, "ذخیره خدمت انجام نشد."), "error");
+    }
+  };
+  const editServiceDefinition = (item: ServiceCatalogItem) => setServiceEditor({ ...emptyServiceEditor, ...item });
+  const toggleServiceDefinition = async (item: ServiceCatalogItem) => {
+    try {
+      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", { item: { ...item, active: item.active === false } });
+      setServiceCatalog((items) => items.map((entry) => entry.id === saved.id ? saved : entry));
+      if (serviceEditor.id === saved.id) setServiceEditor(saved);
+      toast(saved.active ? "خدمت فعال شد." : "خدمت غیرفعال شد.");
+    } catch (error) {
+      toast(getErrorMessage(error, "تغییر وضعیت خدمت انجام نشد."), "error");
+    }
   };
 
   return (
@@ -1841,6 +1982,37 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
               <SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی اطلاعات قبلی</SecondaryButton>
               <SecondaryButton icon={Database} onClick={exportSqlite}>خروجی کامل SQLite</SecondaryButton>
             </div>
+          </div>
+        </div>
+      </section>
+      <section className="card mt-5 p-6 motion-enter">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div><div className="flex items-center gap-2"><ClipboardList className="text-sage" size={24} /><h2 className="text-xl font-bold">تعریف خدمات</h2></div><p className="helper mt-2">خدمات کلینیک را گروه‌بندی کنید. آیتم‌های غیرفعال از انتخاب‌های جدید حذف می‌شوند اما تاریخچه ویزیت‌ها حفظ می‌شود.</p></div>
+          <span className="pill-soft">{formatNumber(serviceCatalog.filter((item) => item.active !== false).length)} خدمت فعال</span>
+        </div>
+        <div className="settings-service-grid mt-6">
+          <div className="service-editor-card">
+            <div className="flex items-center justify-between"><h3 className="text-lg font-bold">{serviceEditor.id ? "ویرایش خدمت" : "خدمت جدید"}</h3>{serviceEditor.id && <button type="button" className="icon-close-button" onClick={() => resetServiceEditor()} aria-label="بستن ویرایش"><X size={18} /></button>}</div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <SelectField label="گروه خدمت" value={(serviceEditor.group_key ?? "other") as string} onChange={(value) => setServiceEditor({ ...serviceEditor, group_key: value as ServiceGroup })} options={serviceGroupLabels} />
+              <TextField label="نام خدمت" value={serviceEditor.name} onChange={(value) => setServiceEditor({ ...serviceEditor, name: value })} placeholder="مثلاً رژیم کاهش وزن" />
+              <NumberField label="قیمت پیش‌فرض" value={serviceEditor.default_price} onChange={(value) => setServiceEditor({ ...serviceEditor, default_price: value })} suffix="تومان" />
+              <OptionalNumberField label="مدت زمان" value={serviceEditor.default_duration_minutes ? String(serviceEditor.default_duration_minutes) : ""} onChange={(value) => setServiceEditor({ ...serviceEditor, default_duration_minutes: value ? Number(value) : null })} suffix="دقیقه" max={600} />
+              <div className="sm:col-span-2"><TextField label="توضیح کوتاه" value={serviceEditor.description ?? ""} onChange={(value) => setServiceEditor({ ...serviceEditor, description: value })} placeholder="کاربرد یا جزئیات آیتم" /></div>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-4">
+              <label className="toggle-row"><input type="checkbox" checked={serviceEditor.body_area_required} onChange={(event) => setServiceEditor({ ...serviceEditor, body_area_required: event.target.checked })} /><span>ناحیه بدن لازم است</span></label>
+              <label className="toggle-row"><input type="checkbox" checked={serviceEditor.active !== false} onChange={(event) => setServiceEditor({ ...serviceEditor, active: event.target.checked })} /><span>فعال</span></label>
+            </div>
+            <div className="mt-5 flex gap-3"><PrimaryButton icon={Save} onClick={saveServiceDefinition}>{serviceEditor.id ? "ذخیره تغییرات" : "افزودن خدمت"}</PrimaryButton>{serviceEditor.id && <SecondaryButton onClick={() => resetServiceEditor()}>انصراف</SecondaryButton>}</div>
+          </div>
+          <div className="grid gap-4">
+            {serviceLoading ? <SkeletonRows /> : serviceGroupKeys.map((group) => {
+              const items = serviceCatalog.filter((item) => (item.group_key ?? "other") === group);
+              if (!items.length) return null;
+              return <div key={group} className="service-settings-group"><div className="mb-3 flex items-center justify-between"><strong>{serviceGroupLabels[group]}</strong><span className="numbers text-xs text-warm-500">{formatNumber(items.length)} آیتم</span></div><div className="grid gap-2">{items.map((item) => <div key={item.id ?? item.name} className={cn("service-settings-row", item.active === false && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{item.description || `${formatNumber(item.default_price)} تومان`}</small></div><div className="flex items-center gap-2"><button type="button" className="mini-action" onClick={() => editServiceDefinition(item)}><Pencil size={16} /> ویرایش</button><button type="button" className="mini-action" onClick={() => toggleServiceDefinition(item)}>{item.active === false ? "فعال‌سازی" : "غیرفعال"}</button></div></div>)}</div></div>;
+            })}
+            {!serviceLoading && serviceCatalog.length === 0 && <EmptyState icon={ClipboardList} title="خدمتی تعریف نشده" text="اولین خدمت را از فرم کنار صفحه اضافه کنید." />}
           </div>
         </div>
       </section>
@@ -1989,6 +2161,10 @@ function NumberField({ label, value, onChange, suffix, error }: { label: string;
   return <div><label className="label">{label}</label><div className={cn("input-with-unit mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-4 focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10", error && "border-red-300 focus-within:border-red-400 focus-within:ring-red-100")}><input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left text-charcoal outline-none" type="number" min="0" dir="ltr" value={value} onChange={(event) => onChange(Number(event.target.value))} /><span className="shrink-0 whitespace-nowrap text-xs font-semibold text-warm-500">{suffix}</span></div><FieldError text={error} /></div>;
 }
 
+function OptionalNumberField({ label, value, onChange, suffix, min = 0, max = 400 }: { label: string; value: string; onChange: (value: string) => void; suffix: string; min?: number; max?: number }) {
+  return <div><label className="label">{label}</label><div className="input-with-unit mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-4 focus-within:border-[var(--primary)] focus-within:ring-4 focus-within:ring-emerald/10"><input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left text-charcoal outline-none" type="number" min={min} max={max} step="0.1" dir="ltr" value={value} onChange={(event) => onChange(event.target.value)} placeholder="اختیاری" /><span className="shrink-0 whitespace-nowrap text-xs font-semibold text-warm-500">{suffix}</span></div></div>;
+}
+
 function SettingNumberField({ label, value, onChange, step = 1 }: { label: string; value: number; onChange: (value: number) => void; step?: number }) {
   return <div><label className="label">{label}</label><input className="control numbers mt-2 w-full text-left" type="number" step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} /></div>;
 }
@@ -1998,21 +2174,28 @@ function TimeField({ label, value, onChange, error }: { label: string; value: st
 }
 
 function DateField({ label, value, onChange, error }: { label: string; value: string; onChange: (value: string) => void; error?: string }) {
-  const currentParts = jalaliPartsFromIso(value || todayIsoDate());
-  const [text, setText] = useState(isoToJalaliInput(value || todayIsoDate()));
+  const normalizedValue = coerceDateToIso(value) || todayIsoDate();
+  const currentParts = jalaliPartsFromIso(normalizedValue);
+  const [text, setText] = useState(isoToJalaliInput(normalizedValue));
   const [openPicker, setOpenPicker] = useState(false);
   const [visibleMonth, setVisibleMonth] = useState({ year: currentParts.jy, month: currentParts.jm });
+  const rootRef = useRef<HTMLDivElement>(null);
+  useOutsideDismiss(rootRef, openPicker, () => setOpenPicker(false));
 
   useEffect(() => {
-    setText(isoToJalaliInput(value || todayIsoDate()));
-    const next = jalaliPartsFromIso(value || todayIsoDate());
+    const nextIso = coerceDateToIso(value) || todayIsoDate();
+    setText(isoToJalaliInput(nextIso));
+    const next = jalaliPartsFromIso(nextIso);
     setVisibleMonth({ year: next.jy, month: next.jm });
   }, [value]);
 
-  const commitText = (nextText: string) => {
+  const commitText = (nextText: string, force = false) => {
     setText(nextText);
     const iso = jalaliInputToIso(nextText);
-    if (iso) onChange(iso);
+    if (iso) {
+      onChange(iso);
+      if (force) setText(isoToJalaliInput(iso));
+    }
   };
   const chooseDay = (day: number) => {
     const iso = jalaliInputToIso(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}/${String(day).padStart(2, "0")}`);
@@ -2029,42 +2212,35 @@ function DateField({ label, value, onChange, error }: { label: string; value: st
       return { year: current.year, month: nextMonth };
     });
   };
-  const selected = jalaliPartsFromIso(value || todayIsoDate());
+  const selected = jalaliPartsFromIso(normalizedValue);
   const days = Array.from({ length: daysInJalaliMonth(visibleMonth.year, visibleMonth.month) }, (_, index) => index + 1);
+  const firstDayIso = jalaliInputToIso(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}/01`);
+  const firstDayOffset = firstDayIso ? (new Date(`${firstDayIso}T00:00:00`).getDay() + 1) % 7 : 0;
 
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <label className="label">{label}</label>
-      <input
-        className={cn("control numbers mt-2 w-full text-left", error && "border-red-300 focus:border-red-400 focus:ring-red-100")}
-        value={text}
-        onFocus={() => setOpenPicker(true)}
-        onChange={(event) => commitText(event.target.value)}
-        placeholder="1405/04/17"
-      />
+      <div className={cn("mt-2 flex h-12 items-center rounded-control border bg-white px-3 focus-within:ring-4", error ? "border-red-300 focus-within:border-red-400 focus-within:ring-red-100" : "border-warm-200 focus-within:border-[var(--primary)] focus-within:ring-emerald/10")}>
+        <input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left outline-none" dir="ltr" value={text} onFocus={() => setOpenPicker(true)} onChange={(event) => commitText(event.target.value)} onBlur={() => commitText(text, true)} placeholder="۱۴۰۵/۰۴/۱۹" />
+        <button type="button" className="grid h-9 w-9 place-items-center rounded-control text-olive hover:bg-warm-50" onClick={() => setOpenPicker((current) => !current)} aria-label="باز کردن تقویم"><CalendarDays size={19} /></button>
+      </div>
       <FieldError text={error} />
       {openPicker && (
-        <div className="absolute z-20 mt-2 w-72 rounded-card border border-warm-100 bg-paper p-3 shadow-soft">
-          <div className="mb-3 flex items-center justify-between">
-            <button type="button" className="h-9 w-9 rounded-control bg-warm-50" onClick={() => moveMonth(1)}>‹</button>
-            <span className="numbers text-sm font-bold">{toPersianDigits(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}`)}</span>
-            <button type="button" className="h-9 w-9 rounded-control bg-warm-50" onClick={() => moveMonth(-1)}>›</button>
+        <div className="popover-panel calendar-popover absolute z-40 mt-2 w-80 p-4">
+          <div className="mb-4 flex items-center justify-between">
+            <button type="button" className="calendar-nav" onClick={() => moveMonth(-1)} aria-label="ماه قبل"><ChevronRight size={18} /></button>
+            <div className="text-center"><strong>{persianMonthNames[visibleMonth.month - 1]}</strong><span className="numbers mr-2 text-sm text-warm-500">{toPersianDigits(visibleMonth.year)}</span></div>
+            <button type="button" className="calendar-nav" onClick={() => moveMonth(1)} aria-label="ماه بعد"><ChevronLeft size={18} /></button>
           </div>
-          <div className="grid grid-cols-7 gap-1">
+          <div className="calendar-weekdays">{persianWeekdayShortLabels.map((day) => <span key={day}>{day}</span>)}</div>
+          <div className="calendar-days">
+            {Array.from({ length: firstDayOffset }, (_, index) => <span key={`blank-${index}`} />)}
             {days.map((day) => {
               const active = selected.jy === visibleMonth.year && selected.jm === visibleMonth.month && selected.jd === day;
-              return (
-                <button
-                  key={day}
-                  type="button"
-                  onClick={() => chooseDay(day)}
-                  className={cn("numbers h-9 rounded-control text-sm hover:bg-warm-50", active && "bg-[var(--primary)] text-white hover:bg-[var(--primary)]")}
-                >
-                  {toPersianDigits(day)}
-                </button>
-              );
+              return <button key={day} type="button" onClick={() => chooseDay(day)} className={cn("calendar-day", active && "calendar-day-active")}>{toPersianDigits(day)}</button>;
             })}
           </div>
+          <div className="mt-4 flex items-center justify-between border-t border-warm-100 pt-3"><button type="button" className="text-xs font-bold text-olive" onClick={() => { const today = todayIsoDate(); onChange(today); setText(isoToJalaliInput(today)); setOpenPicker(false); }}>امروز</button><button type="button" className="text-xs text-warm-500" onClick={() => setOpenPicker(false)}>بستن</button></div>
         </div>
       )}
     </div>
@@ -2111,8 +2287,8 @@ function WeightHistory({ records }: { records: ClientRecord[] }) {
   );
 }
 
-function OverrideField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="block"><span className="text-xs font-medium text-warm-500">{label}</span><input className="control numbers mt-1 h-11 w-full text-left" type="number" min="0" value={value} onChange={(event) => onChange(event.target.value)} placeholder="خودکار" /></label>;
+function OverrideField({ label, value, onChange, suffix, allowNegative = false }: { label: string; value: string; onChange: (value: string) => void; suffix: string; allowNegative?: boolean }) {
+  return <label className="block"><span className="text-xs font-medium text-warm-500">{label}</span><div className="input-with-unit mt-1 flex h-11 items-center gap-2 rounded-control border border-warm-200 bg-white px-3 focus-within:border-[var(--primary)]"><input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left outline-none" type="number" min={allowNegative ? -100 : 0} max="100" value={value} onChange={(event) => onChange(event.target.value)} placeholder="پیش‌فرض" /><span className="text-xs font-semibold text-warm-500">{suffix}</span></div></label>;
 }
 
 function SelectField({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: Record<string, string> }) {

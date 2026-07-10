@@ -324,6 +324,23 @@ export function jalaliInputToIso(value: string) {
   return `${gy}-${String(gm).padStart(2, "0")}-${String(gd).padStart(2, "0")}`;
 }
 
+/**
+ * Accepts the current ISO storage format as well as legacy Jalali text values.
+ * The UI always displays Jalali dates, while SQLite continues to store ISO dates.
+ */
+export function coerceDateToIso(value?: string | null) {
+  const normalized = normalizeDigits(String(value ?? "").trim());
+  if (isValidIsoDate(normalized)) return normalized;
+  return jalaliInputToIso(normalized) ?? "";
+}
+
+export const persianMonthNames = [
+  "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند",
+];
+
+export const persianWeekdayShortLabels = ["ش", "ی", "د", "س", "چ", "پ", "ج"];
+
 export function jalaliPartsFromIso(value: string) {
   const [gy, gm, gd] = (isValidIsoDate(value) ? value : todayIsoDate()).split("-").map(Number);
   return dayToJalali(gregorianToDay(gy, gm, gd));

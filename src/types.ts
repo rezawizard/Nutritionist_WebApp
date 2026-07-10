@@ -71,6 +71,28 @@ export interface Visit {
   updated_at?: string;
 }
 
+export interface ExtendedMeasurements {
+  body_water_percent?: number;
+  fat_mass_kg?: number;
+  muscle_percent?: number;
+  metabolic_age?: number;
+  device_score?: number;
+  upper_abdomen_cm?: number;
+  lower_abdomen_cm?: number;
+  upper_arm_left_cm?: number;
+  upper_arm_right_cm?: number;
+  forearm_left_cm?: number;
+  forearm_right_cm?: number;
+  wrist_left_cm?: number;
+  wrist_right_cm?: number;
+  thigh_left_cm?: number;
+  thigh_right_cm?: number;
+  calf_left_cm?: number;
+  calf_right_cm?: number;
+  ankle_left_cm?: number;
+  ankle_right_cm?: number;
+}
+
 export interface VisitMeasurements {
   id?: number;
   visit_id?: number;
