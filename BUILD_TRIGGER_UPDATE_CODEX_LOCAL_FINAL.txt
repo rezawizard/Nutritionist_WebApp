@@ -1,2 +1,0 @@
-Trigger installer workflow for update/codex-local-final.
-App code source commit: 3d86eeb0a81fdd69ac69b5e3dbef3c4b20e05463
