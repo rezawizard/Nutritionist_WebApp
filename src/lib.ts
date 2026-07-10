@@ -1,6 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { ActivityLevel, AttachmentCategory, CareTrackType, Client, Gender, Goal, ServiceGroup, Settings, VisitType } from "./types";
+import type { ActivityLevel, AttachmentCategory, CareTrackType, Client, DietMeal, Gender, Goal, ServiceGroup, Settings, VisitModeKey, VisitType } from "./types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -23,6 +23,11 @@ export const goalLabels: Record<Goal, string> = {
   lose: "کاهش وزن",
   maintain: "ثبات وزن",
   gain: "افزایش وزن",
+};
+
+export const visitModeDefaultLabels: Record<string, string> = {
+  in_person: "حضوری",
+  online: "آنلاین",
 };
 
 export const visitTypeLabels: Record<VisitType, string> = {
@@ -182,6 +187,48 @@ export function calculateNutrition(
     carbsGrams: (targetCalories * (carbsPercent / 100)) / 4,
     fatGrams: (targetCalories * (fatPercent / 100)) / 9,
   };
+}
+
+export const defaultDietMeals: DietMeal[] = [
+  { id: "breakfast", title: "صبحانه", target_percent: 20, notes: "", items: [] },
+  { id: "morning-snack", title: "میان‌وعده صبح", target_percent: 10, notes: "", items: [] },
+  { id: "lunch", title: "ناهار", target_percent: 30, notes: "", items: [] },
+  { id: "afternoon-snack", title: "میان‌وعده عصر", target_percent: 10, notes: "", items: [] },
+  { id: "dinner", title: "شام", target_percent: 25, notes: "", items: [] },
+  { id: "bedtime", title: "قبل خواب", target_percent: 5, notes: "", items: [] },
+];
+
+export function parseDietMeals(value?: string | null): DietMeal[] {
+  if (!value) return defaultDietMeals.map((meal) => ({ ...meal, items: [] }));
+  try {
+    const parsed = JSON.parse(value) as DietMeal[];
+    if (!Array.isArray(parsed) || !parsed.length) throw new Error("invalid");
+    return parsed.map((meal, index) => ({
+      id: meal.id || `meal-${index + 1}`,
+      title: meal.title || `وعده ${index + 1}`,
+      target_percent: Number.isFinite(Number(meal.target_percent)) ? Number(meal.target_percent) : 0,
+      notes: meal.notes || "",
+      items: Array.isArray(meal.items) ? meal.items : [],
+    }));
+  } catch {
+    return defaultDietMeals.map((meal) => ({ ...meal, items: [] }));
+  }
+}
+
+export function dietMealTotals(meals: DietMeal[]) {
+  return meals.reduce((total, meal) => {
+    for (const item of meal.items) {
+      total.calories += Number(item.calories) || 0;
+      total.protein_g += Number(item.protein_g) || 0;
+      total.carb_g += Number(item.carb_g) || 0;
+      total.fat_g += Number(item.fat_g) || 0;
+    }
+    return total;
+  }, { calories: 0, protein_g: 0, carb_g: 0, fat_g: 0 });
+}
+
+export function visitModeLabel(key: VisitModeKey, snapshot?: string) {
+  return snapshot || visitModeDefaultLabels[String(key)] || String(key || "حضوری");
 }
 
 export function formatNumber(value: number, digits = 0) {

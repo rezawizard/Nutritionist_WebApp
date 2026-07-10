@@ -3,6 +3,7 @@ export type ActivityLevel = "sedentary" | "light" | "moderate" | "active" | "ver
 export type Goal = "lose" | "maintain" | "gain";
 export type VisitStatus = "tentative" | "confirmed" | "done" | "cancelled" | "completed" | "scheduled" | "canceled" | "pending";
 export type VisitType = "initial" | "diet_followup" | "body_analysis" | "device" | "consultation" | "combined";
+export type VisitModeKey = "in_person" | "online" | string;
 export type ServiceGroup = "diet" | "consultation" | "body_analysis" | "device" | "followup" | "package" | "report" | "other";
 export type AttachmentCategory = "profile" | "body_analysis" | "lab" | "medical_report" | "diet_plan" | "device" | "before_after" | "report" | "other";
 export type CareTrackType = "diet" | "body_analysis" | "device" | "consultation" | "combined";
@@ -56,6 +57,8 @@ export interface Visit {
   client_id: number;
   track_id?: number | null;
   visit_type?: VisitType;
+  visit_mode_key?: VisitModeKey;
+  visit_mode_name_snapshot?: string;
   visit_date: string;
   visit_time: string;
   status: string;
@@ -136,6 +139,84 @@ export interface VisitService {
   notes: string;
 }
 
+
+export interface VisitModeOption {
+  id?: number;
+  key: VisitModeKey;
+  name: string;
+  active: boolean;
+  description?: string;
+}
+
+export interface NutritionCalculation {
+  id?: number;
+  client_id: number;
+  visit_id?: number | null;
+  calculated_at: string;
+  gender: Gender;
+  age: number;
+  height_cm: number;
+  weight_kg: number;
+  activity_level: ActivityLevel;
+  goal: Goal;
+  bmi: number;
+  ibw: number;
+  abw: number;
+  bmr: number;
+  tee: number;
+  target_calories: number;
+  calorie_adjustment_percent: number;
+  protein_percent: number;
+  carb_percent: number;
+  fat_percent: number;
+  protein_g: number;
+  carb_g: number;
+  fat_g: number;
+  notes: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface DietMealItem {
+  id: string;
+  title: string;
+  amount: string;
+  calories: number;
+  protein_g: number;
+  carb_g: number;
+  fat_g: number;
+  notes: string;
+}
+
+export interface DietMeal {
+  id: string;
+  title: string;
+  target_percent: number;
+  notes: string;
+  items: DietMealItem[];
+}
+
+export interface DietPlan {
+  id?: number;
+  client_id: number;
+  visit_id?: number | null;
+  calculation_id?: number | null;
+  title: string;
+  plan_date: string;
+  status: "draft" | "active" | "archived" | string;
+  calories_target: number;
+  protein_target_g: number;
+  carb_target_g: number;
+  fat_target_g: number;
+  meals_json: string;
+  hydration_text: string;
+  activity_text: string;
+  guidance_text: string;
+  notes: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Attachment {
   id?: number;
   client_id: number;
@@ -189,6 +270,13 @@ export interface Settings {
   macro_protein_percent?: number;
   macro_carb_percent?: number;
   macro_fat_percent?: number;
+  diet_plan_header_title?: string;
+  diet_plan_footer_text?: string;
+  diet_plan_margin_mm?: number;
+  diet_plan_show_logo?: boolean;
+  diet_plan_show_macros?: boolean;
+  diet_plan_show_calories?: boolean;
+  report_show_contact?: boolean;
 }
 
 export interface DashboardVisitSummary {

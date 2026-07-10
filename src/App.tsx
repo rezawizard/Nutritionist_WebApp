@@ -35,6 +35,14 @@ import {
   Sparkles,
   Target,
   TrendingUp,
+  Trash2,
+  Utensils,
+  Video,
+  MapPin,
+  Trophy,
+  Eye,
+  WandSparkles,
+  ShieldCheck,
   X,
   UserRound,
   Users,
@@ -69,27 +77,38 @@ import {
   isValidIsoDate,
   todayIsoDate,
   toPersianDigits,
+  defaultDietMeals,
+  parseDietMeals,
+  dietMealTotals,
+  visitModeDefaultLabels,
 } from "./lib";
-import type { ActivityLevel, Attachment, AttachmentCategory, CareTrackType, Client, DashboardStats, ExtendedMeasurements, Gender, Goal, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitService, VisitType } from "./types";
+import type { ActivityLevel, Attachment, AttachmentCategory, CareTrackType, Client, DashboardStats, DietMeal, DietPlan, ExtendedMeasurements, Gender, Goal, NutritionCalculation, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitModeOption, VisitService, VisitType } from "./types";
 import type { ClientRecord } from "./types";
 
 const defaultSettings: Settings = {
   dietitian_name: "",
   clinic_name: "",
-  primary_color: "#0f5b46",
-  background_color: "#10517A",
-  text_color: "#f7f3ea",
+  primary_color: "#31A69D",
+  background_color: "#0F5079",
+  text_color: "#F5FBF9",
   logo_path: "",
   background_image_path: "",
   username: "admin",
+  diet_plan_header_title: "برنامه غذایی اختصاصی",
+  diet_plan_footer_text: "این برنامه بر اساس شرایط فردی مراجع تنظیم شده است.",
+  diet_plan_margin_mm: 14,
+  diet_plan_show_logo: true,
+  diet_plan_show_macros: true,
+  diet_plan_show_calories: true,
+  report_show_contact: true,
   ...defaultCalculationSettings,
 };
 
 const dietoyTheme = {
   name: "تم دایتوری",
-  primary_color: "#0f5b46",
-  background_color: "#10517A",
-  text_color: "#f7f3ea",
+  primary_color: "#31A69D",
+  background_color: "#0F5079",
+  text_color: "#F5FBF9",
 };
 
 type Toast = { id: number; text: string; kind?: "success" | "error" };
@@ -141,6 +160,13 @@ const emptyServiceEditor: ServiceCatalogItem = {
   default_duration_minutes: null,
   body_area_required: false,
   active: true,
+};
+
+const emptyVisitModeEditor: VisitModeOption = {
+  key: "",
+  name: "",
+  active: true,
+  description: "",
 };
 
 const newClientStartOptions: Array<{ key: VisitType; title: string; description: string }> = [
@@ -482,22 +508,18 @@ export default function App() {
   );
 }
 
-function BrandLogo({ settings, className = "h-12 w-12" }: { settings: Settings; className?: string }) {
+function BrandLogo({ settings, className = "h-12 w-12", full = false }: { settings: Settings; className?: string; full?: boolean }) {
   const [failed, setFailed] = useState(false);
-  const logo = settings.logo_path ? assetUrl(settings.logo_path) : "/logo.png";
+  const custom = settings.logo_path ? assetUrl(settings.logo_path) : "";
+  const logo = full ? (custom || "/logo.png") : "/logo-symbol.png";
   useEffect(() => setFailed(false), [logo]);
 
   if (failed) {
-    return (
-      <div className={cn("grid place-items-center rounded-control bg-[var(--primary)] text-white shadow-lift", className)}>
-        <Leaf size={23} />
-      </div>
-    );
+    return <div className={cn("grid place-items-center rounded-control bg-[var(--primary)] text-white shadow-lift", className)}><Leaf size={23} /></div>;
   }
-
   return (
-    <div className={cn("grid place-items-center overflow-hidden rounded-control bg-white text-[var(--primary)] shadow-lift", className)}>
-      <img src={logo} alt="Dietoy" className="h-full w-full object-contain p-2" onError={() => setFailed(true)} />
+    <div className={cn("brand-logo-frame grid place-items-center overflow-hidden rounded-control", full && "brand-logo-full", className)}>
+      <img src={logo} alt="Dietoy" className="h-full w-full object-contain" onError={() => setFailed(true)} />
     </div>
   );
 }
@@ -505,7 +527,7 @@ function BrandLogo({ settings, className = "h-12 w-12" }: { settings: Settings; 
 function Brand({ settings }: { settings: Settings }) {
   return (
     <div className="flex items-center gap-3">
-      <BrandLogo settings={settings} />
+      <BrandLogo settings={settings} className="h-14 w-14" />
       <div>
         <p className="text-lg font-bold">{settings.clinic_name || "Dietoy"}</p>
         <p className="mt-1 text-xs text-warm-500">{settings.dietitian_name || "مدیریت حرفه‌ای تغذیه"}</p>
@@ -567,9 +589,8 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
             <div className="luxury-panel-line absolute bottom-20 right-0 h-px w-72 opacity-60" />
             <div className="relative z-10 flex h-full flex-col justify-between">
               <div>
-                <BrandLogo settings={settings} className="h-14 w-14 rounded-card" />
-                <h1 className="mt-8 text-4xl font-bold leading-[1.45]">Dietoy</h1>
-                <p className="mt-4 max-w-sm text-sm leading-8 text-white/78">پرونده‌ها، محاسبات و پشتیبان‌گیری روی همین دستگاه می‌ماند؛ سریع، خصوصی و آماده کار روزانه.</p>
+                <BrandLogo settings={settings} className="h-64 w-72 max-w-full" full />
+                <p className="mt-5 max-w-sm text-sm leading-8 text-white/85">پرونده‌ها، محاسبات، بادی آنالیز و برنامه‌های غذایی در یک فضای آرام، سریع و خصوصی مدیریت می‌شوند.</p>
               </div>
               <div className="rounded-card border border-white/14 bg-white/10 p-5">
                 <p className="text-sm font-semibold">ورود اولیه</p>
@@ -818,12 +839,42 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
   );
 }
 
+function createDietPlanDraft(clientId: number, calculation?: NutritionCalculation | null): DietPlan {
+  return {
+    client_id: clientId,
+    visit_id: null,
+    calculation_id: calculation?.id ?? null,
+    title: "برنامه غذایی اختصاصی",
+    plan_date: todayIsoDate(),
+    status: "draft",
+    calories_target: calculation?.target_calories ?? 0,
+    protein_target_g: calculation?.protein_g ?? 0,
+    carb_target_g: calculation?.carb_g ?? 0,
+    fat_target_g: calculation?.fat_g ?? 0,
+    meals_json: JSON.stringify(defaultDietMeals.map((meal) => ({ ...meal, items: [] }))),
+    hydration_text: "روزانه آب کافی در فاصله وعده‌ها مصرف شود.",
+    activity_text: "فعالیت بدنی مطابق شرایط و توصیه متخصص انجام شود.",
+    guidance_text: "وعده‌ها در زمان منظم مصرف شوند و مقادیر نوشته‌شده رعایت شود.",
+    notes: "",
+  };
+}
+
+function makeDietItem() {
+  return { id: `food-${Date.now()}-${Math.random().toString(16).slice(2)}`, title: "", amount: "", calories: 0, protein_g: 0, carb_g: 0, fat_g: 0, notes: "" };
+}
+
 function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client | null; onBack: () => void; onSaved: (client: Client) => void; toast: ToastFn }) {
   const [form, setForm] = useState<Client>(client ?? { ...emptyClient });
   const [records, setRecords] = useState<ClientRecord[]>([]);
   const [visits, setVisits] = useState<VisitDetail[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
+  const [visitModes, setVisitModes] = useState<VisitModeOption[]>([]);
+  const [nutritionCalculations, setNutritionCalculations] = useState<NutritionCalculation[]>([]);
+  const [dietPlans, setDietPlans] = useState<DietPlan[]>([]);
+  const [profileCalcOverrides, setProfileCalcOverrides] = useState({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
+  const [dietPlanDraft, setDietPlanDraft] = useState<DietPlan | null>(null);
+  const [dietMealOpen, setDietMealOpen] = useState<string>("breakfast");
   const [visitServices, setVisitServices] = useState<Record<number, VisitService[]>>({});
   const [activeTab, setActiveTab] = useState<ProfileTab>(client ? "summary" : "base");
   const [activeTrack, setActiveTrack] = useState<CareTrackType>("diet");
@@ -838,6 +889,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     visit_time: "",
     status: "completed",
     visit_type: "initial" as VisitType,
+    visit_mode_key: "in_person",
+    visit_mode_name_snapshot: "حضوری",
     reason: "",
     weight_kg: client?.weight_kg ?? emptyClient.weight_kg,
     height_cm: client?.height_cm ?? emptyClient.height_cm,
@@ -854,6 +907,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       visit_time: "",
       status: "completed",
       visit_type: "initial" as VisitType,
+      visit_mode_key: visitModes.find((item) => item.active)?.key ?? "in_person",
+      visit_mode_name_snapshot: visitModes.find((item) => item.active)?.name ?? "حضوری",
       reason: "",
       weight_kg: source?.weight_kg ?? emptyClient.weight_kg,
       height_cm: source?.height_cm ?? emptyClient.height_cm,
@@ -881,6 +936,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       setVisits([]);
       setAttachments([]);
       setServiceCatalog([]);
+      setVisitModes([]);
+      setNutritionCalculations([]);
+      setDietPlans([]);
+      setDietPlanDraft(null);
       setVisitServices({});
       return;
     }
@@ -923,14 +982,24 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       setServiceForm((current) => {
         const preferred = items.find((item) => (item.group_key ?? "other") === current.groupKey) ?? items[0];
         if (!preferred) return { ...current, catalogId: "" };
-        return {
-          ...current,
-          groupKey: (preferred.group_key ?? "other") as ServiceGroup,
-          catalogId: String(preferred.id ?? ""),
-          price: preferred.default_price ?? 0,
-        };
+        return { ...current, groupKey: (preferred.group_key ?? "other") as ServiceGroup, catalogId: String(preferred.id ?? ""), price: preferred.default_price ?? 0 };
       });
     }).catch(() => setServiceCatalog([]));
+    invoke<VisitModeOption[]>("list_visit_modes", { activeOnly: true }).then((items) => {
+      setVisitModes(items);
+      const first = items[0];
+      if (first) setVisitForm((current) => ({ ...current, visit_mode_key: current.visit_mode_key || first.key, visit_mode_name_snapshot: current.visit_mode_name_snapshot || first.name }));
+    }).catch(() => setVisitModes([{ key: "in_person", name: "حضوری", active: true }, { key: "online", name: "آنلاین", active: true }]));
+    invoke<NutritionCalculation[]>("list_client_nutrition_calculations", { clientId: client.id }).then((items) => {
+      setNutritionCalculations(items);
+      const latest = items[0];
+      if (latest) setProfileCalcOverrides({ calorieAdjustmentPercent: String(latest.calorie_adjustment_percent || ""), proteinPercent: String(latest.protein_percent), carbsPercent: String(latest.carb_percent), fatPercent: String(latest.fat_percent) });
+      else setProfileCalcOverrides({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
+    }).catch(() => setNutritionCalculations([]));
+    invoke<DietPlan[]>("list_client_diet_plans", { clientId: client.id }).then((items) => {
+      setDietPlans(items);
+      setDietPlanDraft(items[0] ?? null);
+    }).catch(() => setDietPlans([]));
   }, [client]);
 
   useEffect(() => {
@@ -1004,6 +1073,9 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
             visit_date: todayIsoDate(),
             visit_time: "",
             status: "completed",
+            visit_type: visitForm.visit_type,
+            visit_mode_key: visitForm.visit_mode_key,
+            visit_mode_name_snapshot: visitForm.visit_mode_name_snapshot,
             reason: "ثبت اولیه مراجعه",
             clinical_notes: "ثبت اولیه مراجعه",
             private_notes: "",
@@ -1050,6 +1122,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           visit_time: visitForm.visit_time,
           status: visitForm.status,
           visit_type: visitForm.visit_type,
+          visit_mode_key: visitForm.visit_mode_key,
+          visit_mode_name_snapshot: visitForm.visit_mode_name_snapshot,
           reason: visitForm.reason,
           clinical_notes: visitForm.notes,
           private_notes: "",
@@ -1092,7 +1166,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       await invoke<Client>("save_client", { client: updatedClient });
       resetVisitForm(updatedClient);
       setTopError("");
-      toast("ویزیت ثبت شد.");
+      setActiveTab("services");
+      toast("ویزیت ثبت شد؛ اکنون می‌توانید یک یا چند خدمت به آن اضافه کنید.");
     } catch (error) {
       const message = getErrorMessage(error, "ثبت ویزیت انجام نشد؛ علت نامشخص است.");
       setTopError(message);
@@ -1218,6 +1293,105 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     }
   };
 
+  const baseProfileCalculation = calculateNutrition(form);
+  const profileCalorieAdjustmentPercent = Number(profileCalcOverrides.calorieAdjustmentPercent) || 0;
+  const profileCalories = Math.max(0, baseProfileCalculation.targetCalories * (1 + profileCalorieAdjustmentPercent / 100));
+  const profileProteinPercent = profileCalcOverrides.proteinPercent === "" ? baseProfileCalculation.proteinPercent : Number(profileCalcOverrides.proteinPercent);
+  const profileCarbPercent = profileCalcOverrides.carbsPercent === "" ? baseProfileCalculation.carbsPercent : Number(profileCalcOverrides.carbsPercent);
+  const profileFatPercent = profileCalcOverrides.fatPercent === "" ? baseProfileCalculation.fatPercent : Number(profileCalcOverrides.fatPercent);
+  const profileMacroTotal = profileProteinPercent + profileCarbPercent + profileFatPercent;
+  const profileProteinG = profileCalories * profileProteinPercent / 100 / 4;
+  const profileCarbG = profileCalories * profileCarbPercent / 100 / 4;
+  const profileFatG = profileCalories * profileFatPercent / 100 / 9;
+  const latestNutritionCalculation = nutritionCalculations[0] ?? null;
+  const effectiveDietPlan = dietPlanDraft ?? (client?.id ? createDietPlanDraft(client.id, latestNutritionCalculation) : null);
+  const dietMeals = parseDietMeals(effectiveDietPlan?.meals_json);
+  const dietTotals = dietMealTotals(dietMeals);
+  const latestBodyAnalysisFile = attachments.find((item) => item.category === "body_analysis") ?? null;
+  const latestBodyAnalysisVisit = [...visits].reverse().find((item) => item.measurements?.body_fat_percent || item.measurements?.muscle_mass || item.measurements?.visceral_fat) ?? null;
+
+  const saveProfileCalculation = async () => {
+    if (!client?.id) return;
+    if (Math.abs(profileMacroTotal - 100) > 0.2) { toast("جمع درصد ماکروها باید ۱۰۰٪ باشد.", "error"); return; }
+    try {
+      const item: NutritionCalculation = {
+        id: latestNutritionCalculation?.id,
+        client_id: client.id,
+        visit_id: latestNutritionCalculation?.visit_id ?? null,
+        calculated_at: todayIsoDate(),
+        gender: form.gender, age: form.age, height_cm: form.height_cm, weight_kg: form.weight_kg,
+        activity_level: form.activity_level, goal: form.goal,
+        bmi: baseProfileCalculation.bmi, ibw: baseProfileCalculation.ibw, abw: baseProfileCalculation.abw,
+        bmr: baseProfileCalculation.bmr, tee: baseProfileCalculation.tee, target_calories: profileCalories,
+        calorie_adjustment_percent: profileCalorieAdjustmentPercent,
+        protein_percent: profileProteinPercent, carb_percent: profileCarbPercent, fat_percent: profileFatPercent,
+        protein_g: profileProteinG, carb_g: profileCarbG, fat_g: profileFatG,
+        notes: latestNutritionCalculation?.notes ?? "",
+      };
+      const saved = await invoke<NutritionCalculation>("save_nutrition_calculation", { item });
+      setNutritionCalculations((items) => [saved, ...items.filter((entry) => entry.id !== saved.id)]);
+      if (!dietPlanDraft && client.id) setDietPlanDraft(createDietPlanDraft(client.id, saved));
+      else if (dietPlanDraft) setDietPlanDraft({ ...dietPlanDraft, calculation_id: saved.id, calories_target: saved.target_calories, protein_target_g: saved.protein_g, carb_target_g: saved.carb_g, fat_target_g: saved.fat_g });
+      toast("محاسبات در خلاصه پرونده و مسیر رژیم ذخیره شد.");
+    } catch (error) { toast(getErrorMessage(error, "ذخیره محاسبات انجام نشد."), "error"); }
+  };
+
+  const setDietMeals = (next: DietMeal[]) => {
+    if (!client?.id) return;
+    const base = effectiveDietPlan ?? createDietPlanDraft(client.id, latestNutritionCalculation);
+    setDietPlanDraft({ ...base, meals_json: JSON.stringify(next) });
+  };
+  const updateMeal = (mealId: string, patch: Partial<DietMeal>) => setDietMeals(dietMeals.map((meal) => meal.id === mealId ? { ...meal, ...patch } : meal));
+  const addDietItem = (mealId: string) => setDietMeals(dietMeals.map((meal) => meal.id === mealId ? { ...meal, items: [...meal.items, makeDietItem()] } : meal));
+  const updateDietItem = (mealId: string, itemId: string, patch: Record<string, string | number>) => setDietMeals(dietMeals.map((meal) => meal.id === mealId ? {
+    ...meal,
+    items: meal.items.map((item) => {
+      if (item.id !== itemId) return item;
+      const next = { ...item, ...patch };
+      if ("protein_g" in patch || "carb_g" in patch || "fat_g" in patch) {
+        next.calories = Math.round((Number(next.protein_g) || 0) * 4 + (Number(next.carb_g) || 0) * 4 + (Number(next.fat_g) || 0) * 9);
+      }
+      return next;
+    }),
+  } : meal));
+  const removeDietItem = (mealId: string, itemId: string) => setDietMeals(dietMeals.map((meal) => meal.id === mealId ? { ...meal, items: meal.items.filter((item) => item.id !== itemId) } : meal));
+  const syncDietTargets = () => {
+    if (!client?.id) return;
+    const calculation = latestNutritionCalculation;
+    if (!calculation) { toast("ابتدا محاسبات تغذیه را ذخیره کنید.", "error"); return; }
+    const base = effectiveDietPlan ?? createDietPlanDraft(client.id, calculation);
+    setDietPlanDraft({ ...base, calculation_id: calculation.id, calories_target: calculation.target_calories, protein_target_g: calculation.protein_g, carb_target_g: calculation.carb_g, fat_target_g: calculation.fat_g });
+    toast("اهداف برنامه غذایی از آخرین محاسبات بازیابی شد.");
+  };
+  const saveDietPlan = async (): Promise<DietPlan | null> => {
+    if (!client?.id || !effectiveDietPlan) return null;
+    try {
+      const saved = await invoke<DietPlan>("save_diet_plan", { plan: { ...effectiveDietPlan, client_id: client.id, meals_json: JSON.stringify(dietMeals) } });
+      setDietPlanDraft(saved);
+      setDietPlans((items) => [saved, ...items.filter((entry) => entry.id !== saved.id)]);
+      toast("برنامه غذایی ذخیره شد.");
+      return saved;
+    } catch (error) {
+      toast(getErrorMessage(error, "ذخیره برنامه غذایی انجام نشد."), "error");
+      return null;
+    }
+  };
+  const exportDietPlan = async () => {
+    let plan = effectiveDietPlan;
+    if (!plan?.id) plan = await saveDietPlan();
+    if (!plan?.id) return;
+    try { await invoke<string>("export_diet_plan", { planId: plan.id }); toast("نسخه چاپی برنامه غذایی ساخته و باز شد."); }
+    catch (error) { toast(getErrorMessage(error, "خروجی برنامه غذایی ساخته نشد."), "error"); }
+  };
+  const deleteVisitService = async (service: VisitService) => {
+    if (!service.id) return;
+    try {
+      await invoke("delete_visit_service", { id: service.id });
+      setVisitServices((current) => ({ ...current, [service.visit_id]: (current[service.visit_id] ?? []).filter((item) => item.id !== service.id) }));
+      toast("خدمت از این ویزیت حذف شد.");
+    } catch (error) { toast(getErrorMessage(error, "حذف خدمت انجام نشد."), "error"); }
+  };
+
   const latestRecord = records.length ? records[records.length - 1] : undefined;
   const previousRecord = records.length > 1 ? records[records.length - 2] : undefined;
   const weightDelta = latestRecord && previousRecord ? latestRecord.weight_kg - previousRecord.weight_kg : null;
@@ -1291,6 +1465,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => { setVisitForm({ ...visitForm, visit_date: value }); setErrors((current) => ({ ...current, visit_date: undefined })); }} error={errors.visit_date} />
           <TimeField label="ساعت" value={visitForm.visit_time} onChange={(value) => { setVisitForm({ ...visitForm, visit_time: value }); setErrors((current) => ({ ...current, visit_time: undefined })); }} error={errors.visit_time} />
           <SelectField label="نوع ویزیت" value={visitForm.visit_type} onChange={(value) => setVisitForm({ ...visitForm, visit_type: value as VisitType })} options={visitTypeLabels} />
+          <SelectField label="شیوه ویزیت" value={visitForm.visit_mode_key} onChange={(value) => { const selectedMode = visitModes.find((item) => item.key === value); setVisitForm({ ...visitForm, visit_mode_key: value, visit_mode_name_snapshot: selectedMode?.name ?? visitModeDefaultLabels[value] ?? value }); }} options={Object.fromEntries((visitModes.length ? visitModes : [{ key: "in_person", name: "حضوری" }, { key: "online", name: "آنلاین" }]).map((item) => [item.key, item.name]))} />
           <SelectField label="وضعیت" value={visitForm.status} onChange={(value) => setVisitForm({ ...visitForm, status: value })} options={{ completed: "انجام شد", scheduled: "برنامه‌ریزی شده", canceled: "لغو شد" }} />
           <TextField label="دلیل مراجعه" value={visitForm.reason} onChange={(value) => setVisitForm({ ...visitForm, reason: value })} />
           <div />
@@ -1483,7 +1658,14 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
             {serviceForm.groupKey === "device" && <TextField label="نام دستگاه" value={serviceForm.device_name} onChange={(value) => setServiceForm({ ...serviceForm, device_name: value })} placeholder="اختیاری" />}
             <div className="sm:col-span-2"><TextField label="یادداشت خدمت" value={serviceForm.notes} onChange={(value) => setServiceForm({ ...serviceForm, notes: value })} /></div>
           </div>
-          <PrimaryButton icon={Plus} onClick={saveVisitService}>ثبت خدمت</PrimaryButton>
+          {serviceForm.visitId && (visitServices[Number(serviceForm.visitId)] ?? []).length > 0 && (
+            <div className="visit-service-cart">
+              <div className="flex items-center justify-between"><strong>خدمات همین ویزیت</strong><span className="pill-soft">{formatNumber((visitServices[Number(serviceForm.visitId)] ?? []).reduce((sum, item) => sum + item.total, 0))} تومان</span></div>
+              <div className="mt-3 grid gap-2">{(visitServices[Number(serviceForm.visitId)] ?? []).map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-cart-row"><span><strong>{item.service_name_snapshot}</strong><small>{item.body_area || serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup]}</small></span><button type="button" onClick={() => deleteVisitService(item)} aria-label="حذف خدمت"><Trash2 size={16} /></button></div>)}</div>
+            </div>
+          )}
+          <PrimaryButton icon={Plus} onClick={saveVisitService}>افزودن به ویزیت</PrimaryButton>
+          <p className="helper">برای یک ویزیت می‌توانید بدون محدودیت چند خدمت از گروه‌های مختلف اضافه کنید.</p>
         </div>
       </div>
       <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter motion-delay-1">
@@ -1492,7 +1674,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           {visits.slice().reverse().map((visit) => {
             const items = visit.visit.id ? visitServices[visit.visit.id] ?? [] : [];
             if (!items.length) return null;
-            return <div key={visit.visit.id} className="service-group-card"><div className="mb-3 flex items-center justify-between"><strong>{formatPersianDate(visit.visit.visit_date)}</strong><span className="text-xs text-warm-500">{visitTypeLabels[(visit.visit.visit_type ?? "initial") as VisitType]}</span></div><div className="grid gap-2">{items.map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-history-row"><span><strong>{item.service_name_snapshot}</strong><small>{serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup] ?? "سایر"}{item.body_area ? ` · ${item.body_area}` : ""}</small></span><span className="numbers">{formatNumber(item.total)} تومان</span></div>)}</div></div>;
+            return <div key={visit.visit.id} className="service-group-card"><div className="mb-3 flex items-center justify-between"><strong>{formatPersianDate(visit.visit.visit_date)}</strong><span className="text-xs text-warm-500">{visitTypeLabels[(visit.visit.visit_type ?? "initial") as VisitType]}</span></div><div className="grid gap-2">{items.map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-history-row"><span><strong>{item.service_name_snapshot}</strong><small>{serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup] ?? "سایر"}{item.body_area ? ` · ${item.body_area}` : ""}</small></span><span className="flex items-center gap-2"><b className="numbers">{formatNumber(item.total)} تومان</b><button type="button" className="icon-close-button" onClick={() => deleteVisitService(item)} aria-label="حذف خدمت"><Trash2 size={15} /></button></span></div>)}</div></div>;
           })}
           {Object.values(visitServices).flat().length === 0 && <EmptyState icon={ClipboardList} title="خدمتی ثبت نشده" text="بعد از ثبت ویزیت، گروه و آیتم خدمت را از فرم کنار صفحه انتخاب کنید." />}
         </div>
@@ -1526,6 +1708,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
             <div className="nested-summary-box"><h4>آخرین فعالیت‌ها</h4>{allowedVisits.length ? allowedVisits.slice(-3).reverse().map((item) => <div key={item.visit.id ?? item.visit.visit_date} className="nested-summary-row"><span>{formatPersianDate(item.visit.visit_date)}</span><strong>{visitTypeLabels[(item.visit.visit_type ?? "initial") as VisitType]}</strong></div>) : <p className="helper mt-3">هنوز ویزیتی در این مسیر ثبت نشده است.</p>}</div>
             <div className="nested-summary-box"><h4>فایل‌های مرتبط</h4>{allowedFiles.length ? allowedFiles.slice(0, 3).map((item) => <button type="button" key={item.id ?? item.file_name} onClick={() => openAttachment(item)} className="nested-summary-row w-full"><span>{attachmentCategoryLabels[item.category as AttachmentCategory] ?? "سایر"}</span><strong>{item.title || item.file_name}</strong></button>) : <p className="helper mt-3">فایلی در این مسیر ثبت نشده است.</p>}</div>
           </div>
+          {activeTrack === "body_analysis" && <div className="body-analysis-embed mt-5"><div className="flex items-center justify-between gap-3"><div><h4>آخرین بادی آنالیز</h4><p className="helper mt-1">پرینت یا تصویر دستگاه بدون خروج از پرونده قابل مشاهده است.</p></div>{latestBodyAnalysisFile && <button className="mini-action" onClick={() => openAttachment(latestBodyAnalysisFile)}><Eye size={16} /> باز کردن کامل</button>}</div>{latestBodyAnalysisFile ? (/\.(png|jpe?g|webp|bmp|gif)$/i.test(latestBodyAnalysisFile.file_name) ? <img src={assetUrl(latestBodyAnalysisFile.local_path)} alt={latestBodyAnalysisFile.title || "بادی آنالیز"} /> : /\.pdf$/i.test(latestBodyAnalysisFile.file_name) ? <iframe title="پیش‌نمایش بادی آنالیز" src={assetUrl(latestBodyAnalysisFile.local_path)} /> : <button className="embedded-file-fallback" onClick={() => openAttachment(latestBodyAnalysisFile)}><FileText size={30} /><strong>{latestBodyAnalysisFile.title || latestBodyAnalysisFile.file_name}</strong><span>برای مشاهده فایل کلیک کنید</span></button>) : <div className="mini-empty">هنوز فایل بادی آنالیز بارگذاری نشده است. از تب فایل‌ها دسته «بادی آنالیز» را انتخاب کنید.</div>}</div>}
+
         </div>
       </div>
     );
@@ -1549,30 +1733,83 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   })() : null;
 
   const nutritionPanel = client?.id ? (
-    <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
-      <div className="rounded-card border border-warm-100 bg-white p-5">
-        <h2 className="text-lg font-bold">محاسبات و رژیم</h2>
-        <p className="helper mt-2">برای رژیم، محاسبات انرژی از اطلاعات پایه ساخته می‌شود و در گزارش پرونده استفاده می‌شود.</p>
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
-          {(() => {
-            const calc = calculateNutrition(form);
-            return <>
-              <ResultCard title="BMI" value={formatNumber(calc.bmi, 1)} unit={bmiCategory(calc.bmi)} text="وضعیت سریع وزن بر اساس قد و وزن." />
-              <ResultCard title="کالری هدف" value={formatNumber(calc.targetCalories)} unit="کیلوکالری" text="براساس هدف، ABW و سطح فعالیت." featured />
-              <ResultCard title="پروتئین" value={formatNumber(calc.proteinGrams)} unit="گرم" text={`${toPersianDigits(calc.proteinPercent)}٪ از کالری هدف.`} />
-              <ResultCard title="کربوهیدرات" value={formatNumber(calc.carbsGrams)} unit="گرم" text={`${toPersianDigits(calc.carbsPercent)}٪ از کالری هدف.`} />
-            </>;
-          })()}
+    <div className="grid gap-5">
+      <section className="rounded-card border border-warm-100 bg-white p-5 motion-enter">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div><div className="flex items-center gap-2"><Calculator className="text-sage" size={23} /><h2 className="text-xl font-bold">محاسبات متصل به پرونده</h2></div><p className="helper mt-2">آخرین محاسبه در خلاصه پرونده، مسیر رژیم، گزارش و فرم برنامه غذایی استفاده می‌شود.</p></div>
+          <PrimaryButton icon={Save} onClick={saveProfileCalculation}>{latestNutritionCalculation ? "به‌روزرسانی محاسبات" : "ذخیره محاسبات"}</PrimaryButton>
         </div>
-      </div>
-      <div className="rounded-card border border-warm-100 bg-warm-50 p-5">
-        <h2 className="text-lg font-bold">پایش رژیم</h2>
-        <p className="helper mt-2">در ویزیت پیگیری رژیم، وزن فعلی، یادداشت پایبندی و هدف هفته بعد را ثبت کنید. فایل برنامه غذایی را از تب فایل‌ها بارگذاری کنید.</p>
-        <div className="mt-5 grid gap-3">
-          <SecondaryButton icon={Calculator} onClick={() => toast("از منوی محاسبات تغذیه می‌توانید محاسبه جداگانه انجام دهید.")}>محاسبات تغذیه</SecondaryButton>
-          <SecondaryButton icon={FileUp} onClick={() => setActiveTab("files")}>بارگذاری فایل رژیم</SecondaryButton>
+        <div className="mt-5 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+          <ResultCard title="BMI" value={formatNumber(baseProfileCalculation.bmi, 1)} unit={bmiCategory(baseProfileCalculation.bmi)} text="شاخص فعلی" />
+          <ResultCard title="IBW" value={formatNumber(baseProfileCalculation.ibw, 1)} unit="kg" text="وزن مرجع" />
+          <ResultCard title="BMR" value={formatNumber(baseProfileCalculation.bmr)} unit="kcal" text="انرژی پایه" />
+          <ResultCard title="TEE" value={formatNumber(baseProfileCalculation.tee)} unit="kcal" text="نیاز روزانه" />
+          <ResultCard title="کالری هدف" value={formatNumber(profileCalories)} unit="kcal" text={latestNutritionCalculation ? `ذخیره‌شده ${formatPersianDate(latestNutritionCalculation.calculated_at)}` : "هنوز ذخیره نشده"} featured />
+          <ResultCard title="ماکروها" value={`${formatNumber(profileProteinPercent)}/${formatNumber(profileCarbPercent)}/${formatNumber(profileFatPercent)}`} unit="٪" text="پروتئین / کربوهیدرات / چربی" />
         </div>
-      </div>
+        <div className="mt-5 rounded-card bg-warm-50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><strong>اصلاح درصدی</strong><p className="helper mt-1">تغییرات بعد از ذخیره در کل پرونده قابل بازیابی است.</p></div><span className={cn("macro-total", Math.abs(profileMacroTotal - 100) < 0.01 ? "macro-total-ok" : "macro-total-warning")}>جمع {formatNumber(profileMacroTotal)}٪</span></div>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><OverrideField label="تغییر کالری" value={profileCalcOverrides.calorieAdjustmentPercent} onChange={(value) => setProfileCalcOverrides({ ...profileCalcOverrides, calorieAdjustmentPercent: value })} suffix="درصد" allowNegative /><OverrideField label="پروتئین" value={profileCalcOverrides.proteinPercent} onChange={(value) => setProfileCalcOverrides({ ...profileCalcOverrides, proteinPercent: value })} suffix="درصد" /><OverrideField label="کربوهیدرات" value={profileCalcOverrides.carbsPercent} onChange={(value) => setProfileCalcOverrides({ ...profileCalcOverrides, carbsPercent: value })} suffix="درصد" /><OverrideField label="چربی" value={profileCalcOverrides.fatPercent} onChange={(value) => setProfileCalcOverrides({ ...profileCalcOverrides, fatPercent: value })} suffix="درصد" /></div>
+        </div>
+      </section>
+
+      <section className="rounded-card border border-warm-100 bg-white p-5 motion-enter motion-delay-1">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div><div className="flex items-center gap-2"><Utensils className="text-sage" size={23} /><h2 className="text-xl font-bold">فرم برنامه غذایی</h2></div><p className="helper mt-2">قالب استاندارد وعده‌ای؛ جمع کالری و ماکروهای آیتم‌ها به‌صورت خودکار با هدف مراجع مقایسه می‌شود.</p></div>
+          <div className="flex flex-wrap gap-2"><SecondaryButton icon={WandSparkles} onClick={syncDietTargets}>بازیابی اهداف محاسبات</SecondaryButton><SecondaryButton icon={FileText} onClick={exportDietPlan}>چاپ / PDF</SecondaryButton><PrimaryButton icon={Save} onClick={saveDietPlan}>ذخیره برنامه</PrimaryButton></div>
+        </div>
+        {effectiveDietPlan && <>
+          <div className="mt-5 grid gap-4 md:grid-cols-3"><TextField label="عنوان برنامه" value={effectiveDietPlan.title} onChange={(value) => setDietPlanDraft({ ...effectiveDietPlan, title: value })} /><DateField label="تاریخ برنامه" value={effectiveDietPlan.plan_date} onChange={(value) => setDietPlanDraft({ ...effectiveDietPlan, plan_date: coerceDateToIso(value) || value })} /><SelectField label="وضعیت" value={effectiveDietPlan.status} onChange={(value) => setDietPlanDraft({ ...effectiveDietPlan, status: value })} options={{ draft: "پیش‌نویس", active: "فعال", archived: "بایگانی" }} /></div>
+          <div className="diet-target-strip mt-5"><div><span>هدف روزانه</span><strong>{formatNumber(effectiveDietPlan.calories_target)} kcal</strong></div><div><span>ثبت‌شده</span><strong>{formatNumber(dietTotals.calories)} kcal</strong></div><div><span>پروتئین</span><strong>{formatNumber(dietTotals.protein_g, 1)} / {formatNumber(effectiveDietPlan.protein_target_g)} g</strong></div><div><span>کربوهیدرات</span><strong>{formatNumber(dietTotals.carb_g, 1)} / {formatNumber(effectiveDietPlan.carb_target_g)} g</strong></div><div><span>چربی</span><strong>{formatNumber(dietTotals.fat_g, 1)} / {formatNumber(effectiveDietPlan.fat_target_g)} g</strong></div></div>
+          <div className="macro-progress mt-3"><span style={{ width: `${Math.min(100, effectiveDietPlan.calories_target ? dietTotals.calories / effectiveDietPlan.calories_target * 100 : 0)}%` }} /></div>
+          <div className="mt-5 grid gap-3">{dietMeals.map((meal) => {
+            const mealTotals = dietMealTotals([meal]);
+            const openMeal = dietMealOpen === meal.id;
+            return <div key={meal.id} className="diet-meal-card"><button type="button" className="diet-meal-head" onClick={() => setDietMealOpen(openMeal ? "" : meal.id)}><span><strong>{meal.title}</strong><small>سهم هدف {formatNumber(meal.target_percent)}٪ · {formatNumber(mealTotals.calories)} kcal · {formatNumber(meal.items.length)} آیتم</small></span><ChevronLeft className={cn("soft-transition", openMeal && "-rotate-90")} size={20} /></button>{openMeal && <div className="diet-meal-body"><div className="grid gap-3 md:grid-cols-[1fr_160px]"><TextField label="عنوان وعده" value={meal.title} onChange={(value) => updateMeal(meal.id, { title: value })} /><NumberField label="سهم کالری" value={meal.target_percent} onChange={(value) => updateMeal(meal.id, { target_percent: value })} suffix="درصد" /></div><div className="mt-4 grid gap-3">{meal.items.map((item) => <div key={item.id} className="diet-food-row"><TextField label="غذا / آیتم" value={item.title} onChange={(value) => updateDietItem(meal.id, item.id, { title: value })} placeholder="مثلاً نان سنگک" /><TextField label="مقدار" value={item.amount} onChange={(value) => updateDietItem(meal.id, item.id, { amount: value })} placeholder="مثلاً یک کف دست" /><OptionalNumberField label="کالری" value={String(item.calories || "")} onChange={(value) => updateDietItem(meal.id, item.id, { calories: Number(value) || 0 })} suffix="kcal" /><OptionalNumberField label="پروتئین" value={String(item.protein_g || "")} onChange={(value) => updateDietItem(meal.id, item.id, { protein_g: Number(value) || 0 })} suffix="g" /><OptionalNumberField label="کربوهیدرات" value={String(item.carb_g || "")} onChange={(value) => updateDietItem(meal.id, item.id, { carb_g: Number(value) || 0 })} suffix="g" /><OptionalNumberField label="چربی" value={String(item.fat_g || "")} onChange={(value) => updateDietItem(meal.id, item.id, { fat_g: Number(value) || 0 })} suffix="g" /><button type="button" className="diet-remove" onClick={() => removeDietItem(meal.id, item.id)}><Trash2 size={17} /> حذف</button></div>)}{meal.items.length === 0 && <div className="mini-empty">هنوز آیتمی اضافه نشده؛ فقط اطلاعاتی را وارد کنید که واقعاً در نسخه مراجع لازم است.</div>}</div><div className="mt-4"><SecondaryButton icon={Plus} onClick={() => addDietItem(meal.id)}>افزودن آیتم غذا</SecondaryButton></div></div>}</div>;
+          })}</div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2"><div><label className="label">آب و مایعات</label><textarea className="control mt-2 min-h-24 w-full py-3" value={effectiveDietPlan.hydration_text} onChange={(e) => setDietPlanDraft({ ...effectiveDietPlan, hydration_text: e.target.value })} /></div><div><label className="label">فعالیت بدنی</label><textarea className="control mt-2 min-h-24 w-full py-3" value={effectiveDietPlan.activity_text} onChange={(e) => setDietPlanDraft({ ...effectiveDietPlan, activity_text: e.target.value })} /></div><div><label className="label">راهنمای اجرا</label><textarea className="control mt-2 min-h-24 w-full py-3" value={effectiveDietPlan.guidance_text} onChange={(e) => setDietPlanDraft({ ...effectiveDietPlan, guidance_text: e.target.value })} /></div><div><label className="label">یادداشت متخصص</label><textarea className="control mt-2 min-h-24 w-full py-3" value={effectiveDietPlan.notes} onChange={(e) => setDietPlanDraft({ ...effectiveDietPlan, notes: e.target.value })} /></div></div>
+        </>}
+      </section>
+      {dietPlans.length > 0 && <section className="rounded-card border border-warm-100 bg-warm-50 p-5"><h3 className="font-bold">نسخه‌های قبلی برنامه غذایی</h3><div className="mt-4 grid gap-2">{dietPlans.map((plan) => <button key={plan.id} type="button" onClick={() => setDietPlanDraft(plan)} className="nested-summary-row w-full"><span>{formatPersianDate(plan.plan_date)}</span><strong>{plan.title}</strong></button>)}</div></section>}
+    </div>
+  ) : null;
+
+  const profileCompletionItems = [Boolean(form.full_name), Boolean(form.phone), form.height_cm > 0, form.weight_kg > 0, visits.length > 0, Boolean(latestNutritionCalculation), Boolean(latestBodyAnalysisFile), Boolean(dietPlans.length)];
+  const profileCompletion = Math.round(profileCompletionItems.filter(Boolean).length / profileCompletionItems.length * 100);
+  const allServices = Object.values(visitServices).flat();
+  const latestServices = allServices.slice(-4).reverse();
+  const activeTrackSet = new Set<CareTrackType>();
+  visits.forEach((item) => {
+    const type = (item.visit.visit_type ?? "initial") as VisitType;
+    if (["initial", "diet_followup"].includes(type)) activeTrackSet.add("diet");
+    if (type === "body_analysis") activeTrackSet.add("body_analysis");
+    if (type === "device") activeTrackSet.add("device");
+    if (type === "consultation") activeTrackSet.add("consultation");
+    if (type === "combined") activeTrackSet.add("combined");
+  });
+  const summaryPanel = client?.id ? (
+    <div className="grid gap-5">
+      <section className="profile-hero-summary">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center"><ProfileAvatar client={form} size="lg" /><div className="flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-2xl font-extrabold">{form.full_name}</h2><span className="pill-soft">{goalLabels[form.goal]}</span>{form.archived && <span className="pill-soft">بایگانی</span>}</div><p className="helper mt-2">{form.phone || "شماره تماس ثبت نشده"} · {genderLabels[form.gender]} · {formatNumber(form.age)} سال</p><div className="mt-4 flex flex-wrap gap-2">{Array.from(activeTrackSet).length ? Array.from(activeTrackSet).map((track) => <button type="button" key={track} className="track-chip" onClick={() => { setActiveTrack(track); setActiveTab("tracks"); }}>{careTrackLabels[track]}</button>) : <span className="text-xs text-warm-500">مسیر فعال بعد از اولین ویزیت ساخته می‌شود.</span>}</div></div><div className="completion-orb"><strong>{formatNumber(profileCompletion)}٪</strong><span>تکمیل پرونده</span></div></div>
+        <div className="macro-progress mt-5"><span style={{ width: `${profileCompletion}%` }} /></div>
+      </section>
+      <section className="summary-command-grid">
+        <button onClick={() => setActiveTab("visits")}><CalendarCheck /><span><strong>ویزیت بعدی</strong><small>{latestVisit?.visit.next_visit_enabled && latestVisit.visit.next_visit_date ? `${formatPersianDate(latestVisit.visit.next_visit_date)} ${latestVisit.visit.next_visit_time || ""}` : "زمانی ثبت نشده"}</small></span></button>
+        <button onClick={() => setActiveTab("nutrition")}><Calculator /><span><strong>هدف تغذیه</strong><small>{latestNutritionCalculation ? `${formatNumber(latestNutritionCalculation.target_calories)} کیلوکالری` : "محاسبات ذخیره نشده"}</small></span></button>
+        <button onClick={() => { setActiveTrack("body_analysis"); setActiveTab("tracks"); }}><Activity /><span><strong>آخرین بادی آنالیز</strong><small>{latestBodyAnalysisVisit?.measurements?.body_fat_percent ? `چربی ${formatNumber(latestBodyAnalysisVisit.measurements.body_fat_percent, 1)}٪` : latestBodyAnalysisFile ? "فایل موجود است" : "ثبت نشده"}</small></span></button>
+        <button onClick={() => setActiveTab("services")}><ClipboardList /><span><strong>خدمات اخیر</strong><small>{latestServices.length ? latestServices.map((item) => item.service_name_snapshot).join("، ") : "خدمتی ثبت نشده"}</small></span></button>
+      </section>
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <ResultCard title="وزن فعلی" value={latestRecord ? formatNumber(latestRecord.weight_kg, 1) : formatNumber(form.weight_kg, 1)} unit="کیلوگرم" text={latestRecord ? formatPersianDate(latestRecord.record_date) : "اطلاعات پایه"} />
+        <ResultCard title="تغییر از ویزیت قبل" value={weightDelta === null ? "—" : formatNumber(weightDelta, 1)} unit="کیلوگرم" text={weightDelta === null ? "حداقل دو اندازه‌گیری لازم است" : weightDelta < 0 ? "کاهش ثبت شده" : "افزایش ثبت شده"} />
+        <ResultCard title="BMI" value={latestBmi ? formatNumber(latestBmi, 1) : formatNumber(baseProfileCalculation.bmi, 1)} unit={bmiCategory(latestBmi ?? baseProfileCalculation.bmi)} text="بر اساس آخرین وزن و قد" featured />
+        <ResultCard title="ویزیت‌های پرونده" value={formatNumber(visits.length)} unit="جلسه" text={latestVisit ? `آخرین: ${formatPersianDate(latestVisit.visit.visit_date)}` : "هنوز ویزیتی ثبت نشده"} />
+      </section>
+      <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="rounded-card border border-warm-100 bg-white p-5"><div className="flex items-center justify-between"><div><h3 className="font-bold">تصویر کامل وضعیت فعلی</h3><p className="helper mt-1">شاخص‌های اصلی برای تصمیم‌گیری سریع متخصص.</p></div><Target className="text-sage" /></div><div className="measurement-overview mt-5"><div><span>هدف اصلی</span><strong>{goalLabels[form.goal]}</strong></div><div><span>سطح فعالیت</span><strong>{activityLabels[form.activity_level]}</strong></div><div><span>کالری هدف</span><strong>{latestNutritionCalculation ? `${formatNumber(latestNutritionCalculation.target_calories)} kcal` : "—"}</strong></div><div><span>برنامه غذایی</span><strong>{dietPlans[0]?.title || "ثبت نشده"}</strong></div><div><span>فایل‌ها</span><strong>{formatNumber(attachments.length)} فایل</strong></div><div><span>خدمات</span><strong>{formatNumber(allServices.length)} مورد</strong></div></div></div>
+        <div className="rounded-card border border-warm-100 bg-warm-50 p-5"><div className="flex items-center gap-2"><Trophy className="text-sage" /><h3 className="font-bold">پیشرفت پرونده</h3></div><div className="mt-4 grid gap-2"><div className={cn("achievement-row", visits.length && "done")}><CheckCircle2 /> اولین ویزیت</div><div className={cn("achievement-row", latestNutritionCalculation && "done")}><CheckCircle2 /> محاسبات ذخیره‌شده</div><div className={cn("achievement-row", latestBodyAnalysisFile && "done")}><CheckCircle2 /> بادی آنالیز</div><div className={cn("achievement-row", dietPlans.length && "done")}><CheckCircle2 /> برنامه غذایی</div></div></div>
+      </section>
+      {form.notes && <section className="rounded-card border border-warm-100 bg-white p-5"><h3 className="font-bold">یادداشت مهم پرونده</h3><p className="mt-3 whitespace-pre-wrap text-sm leading-8 text-warm-500">{form.notes}</p></section>}
     </div>
   ) : null;
 
@@ -1603,14 +1840,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           </div>
         )}
         {!client?.id || activeTab === "base" ? baseInfo : null}
-        {client?.id && activeTab === "summary" && (
-          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-            <ResultCard title="آخرین وزن" value={latestRecord ? formatNumber(latestRecord.weight_kg, 1) : "—"} unit="کیلوگرم" text={latestRecord ? formatPersianDate(latestRecord.record_date) : "هنوز ویزیتی ثبت نشده است."} />
-            <ResultCard title="تغییر وزن" value={weightDelta === null ? "—" : formatNumber(weightDelta, 1)} unit="کیلوگرم" text="نسبت به ویزیت قبلی." />
-            <ResultCard title="BMI" value={latestBmi ? formatNumber(latestBmi, 1) : "—"} unit={latestBmi ? bmiCategory(latestBmi) : "بدون داده"} text="بر اساس آخرین اندازه‌گیری." featured />
-            <ResultCard title="مراجعه بعدی" value={latestVisit?.visit.next_visit_enabled && latestVisit.visit.next_visit_date ? isoToJalaliInput(latestVisit.visit.next_visit_date) : "—"} unit={latestVisit?.visit.next_visit_time || ""} text={latestVisit?.visit.next_visit_enabled ? "از آخرین ویزیت ثبت شده." : "برای این مراجعه زمان بعدی ثبت نشده است."} />
-          </div>
-        )}
+        {client?.id && activeTab === "summary" ? summaryPanel : null}
         {client?.id && activeTab === "tracks" ? tracksPanel : null}
         {client?.id && activeTab === "visits" ? visitsPanel : null}
         {client?.id && activeTab === "measurements" ? measurementsPanel : null}
@@ -1629,9 +1859,26 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Client[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [savedCalculation, setSavedCalculation] = useState<NutritionCalculation | null>(null);
   const searchRef = useRef<HTMLDivElement>(null);
   const [overrides, setOverrides] = useState({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
   useOutsideDismiss(searchRef, searchOpen, () => setSearchOpen(false));
+
+  const hydrateSaved = (items: NutritionCalculation[]) => {
+    const latest = items[0] ?? null;
+    setSavedCalculation(latest);
+    if (latest) {
+      setOverrides({
+        calorieAdjustmentPercent: String(latest.calorie_adjustment_percent || ""),
+        proteinPercent: String(latest.protein_percent),
+        carbsPercent: String(latest.carb_percent),
+        fatPercent: String(latest.fat_percent),
+      });
+    } else {
+      setOverrides({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
+    }
+  };
 
   useEffect(() => {
     setSelected(initialClient);
@@ -1639,10 +1886,12 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
   }, [initialClient]);
 
   useEffect(() => {
-    if (!query.trim() || !isDesktopRuntime()) {
-      setResults([]);
-      return;
-    }
+    if (!selected?.id || !isDesktopRuntime()) { setSavedCalculation(null); return; }
+    invoke<NutritionCalculation[]>("list_client_nutrition_calculations", { clientId: selected.id }).then(hydrateSaved).catch(() => setSavedCalculation(null));
+  }, [selected?.id]);
+
+  useEffect(() => {
+    if (!query.trim() || !isDesktopRuntime()) { setResults([]); return; }
     const timer = window.setTimeout(() => invoke<Client[]>("search_clients", { query }).then((items) => { setResults(items); setSearchOpen(true); }).catch(() => setResults([])), 150);
     return () => window.clearTimeout(timer);
   }, [query]);
@@ -1658,39 +1907,54 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
   const carbs = (calories * (carbsPercent / 100)) / 4;
   const fat = (calories * (fatPercent / 100)) / 9;
   const setField = <K extends keyof Client>(key: K, value: Client[K]) => setInput((current) => ({ ...current, [key]: value }));
+
   const choose = (client: Client) => {
-    setSelected(client);
-    setInput(client);
-    setQuery("");
-    setResults([]);
-    setSearchOpen(false);
+    setSelected(client); setInput(client); setQuery(""); setResults([]); setSearchOpen(false);
     toast("اطلاعات مراجع در محاسبات تغذیه قرار گرفت.");
   };
   const clear = () => {
-    setSelected(null);
-    setInput({ ...emptyClient });
-    setQuery("");
-    setSearchOpen(false);
+    setSelected(null); setInput({ ...emptyClient }); setQuery(""); setSearchOpen(false); setSavedCalculation(null);
     setOverrides({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
+  };
+
+  const saveCalculation = async () => {
+    if (!selected?.id) { toast("برای ذخیره محاسبات، ابتدا یک مراجع ذخیره‌شده را انتخاب کنید.", "error"); return; }
+    if (Math.abs(macroTotal - 100) > 0.2) { toast("جمع درصد ماکروها باید ۱۰۰٪ باشد.", "error"); return; }
+    setSaving(true);
+    try {
+      const item: NutritionCalculation = {
+        id: savedCalculation?.id,
+        client_id: selected.id,
+        visit_id: savedCalculation?.visit_id ?? null,
+        calculated_at: todayIsoDate(),
+        gender: input.gender, age: input.age, height_cm: input.height_cm, weight_kg: input.weight_kg,
+        activity_level: input.activity_level, goal: input.goal,
+        bmi: calc.bmi, ibw: calc.ibw, abw: calc.abw, bmr: calc.bmr, tee: calc.tee,
+        target_calories: calories, calorie_adjustment_percent: calorieAdjustmentPercent,
+        protein_percent: proteinPercent, carb_percent: carbsPercent, fat_percent: fatPercent,
+        protein_g: protein, carb_g: carbs, fat_g: fat, notes: savedCalculation?.notes ?? "",
+      };
+      const saved = isDesktopRuntime() ? await invoke<NutritionCalculation>("save_nutrition_calculation", { item }) : item;
+      setSavedCalculation(saved);
+      toast("محاسبات در پرونده و مسیر رژیم ذخیره شد.");
+    } catch (error) { toast(getErrorMessage(error, "ذخیره محاسبات انجام نشد."), "error"); }
+    finally { setSaving(false); }
   };
 
   return (
     <>
-      <PageHeader title="محاسبات تغذیه" subtitle="مراجع ذخیره‌شده را انتخاب کنید یا داده‌ها را دستی وارد کنید؛ اصلاح دستی بر اساس درصد انجام می‌شود." />
+      <PageHeader title="محاسبات تغذیه" subtitle="محاسبه را به مراجع متصل کنید تا در خلاصه پرونده، مسیر رژیم و برنامه غذایی همیشه بازیابی شود." action={selected ? <PrimaryButton icon={Save} onClick={saveCalculation}>{saving ? "در حال ذخیره" : savedCalculation ? "به‌روزرسانی در پرونده" : "ذخیره در پرونده"}</PrimaryButton> : undefined} />
       <div className="grid gap-5 xl:grid-cols-[430px_1fr]">
         <section className="card p-6 motion-enter">
           <div className="mb-5 flex items-center justify-between gap-3">
-            <div><h2 className="text-xl font-bold">ورودی‌ها</h2><p className="helper mt-1">{selected ? `مراجع انتخاب‌شده: ${selected.full_name}` : "حالت ورود دستی فعال است."}</p></div>
+            <div><h2 className="text-xl font-bold">ورودی‌ها</h2><p className="helper mt-1">{selected ? `مراجع انتخاب‌شده: ${selected.full_name}` : "حالت ورود دستی فعال است؛ برای ذخیره، مراجع را انتخاب کنید."}</p></div>
             {selected && <SecondaryButton icon={RotateCcw} onClick={clear}>ورود دستی</SecondaryButton>}
           </div>
+          {savedCalculation && <div className="mb-4 rounded-control border border-mint/50 bg-mint/10 px-4 py-3 text-xs font-semibold text-[var(--primary)]"><CheckCircle2 className="ml-2 inline" size={17} /> آخرین محاسبه پرونده بارگذاری شد؛ ویرایش‌ها روی همان رکورد ذخیره می‌شوند.</div>}
           <div ref={searchRef} className="relative mb-5">
             <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={20} />
             <input className="control w-full pr-12" value={query} onFocus={() => results.length > 0 && setSearchOpen(true)} onChange={(event) => { setQuery(event.target.value); setSearchOpen(Boolean(event.target.value)); }} placeholder="جست‌وجوی مراجع ذخیره‌شده" />
-            {searchOpen && results.length > 0 && (
-              <div className="popover-panel absolute z-30 mt-2 max-h-72 w-full overflow-auto p-2">
-                {results.map((client) => <button type="button" key={client.id} onClick={() => choose(client)} className="soft-transition flex w-full items-center justify-between rounded-control px-3 py-3 text-right hover:bg-warm-50"><span className="font-semibold">{client.full_name}</span><span className="text-xs text-warm-500">{goalLabels[client.goal]}</span></button>)}
-              </div>
-            )}
+            {searchOpen && results.length > 0 && <div className="popover-panel absolute z-30 mt-2 max-h-72 w-full overflow-auto p-2">{results.map((client) => <button type="button" key={client.id} onClick={() => choose(client)} className="soft-transition flex w-full items-center justify-between rounded-control px-3 py-3 text-right hover:bg-warm-50"><span className="font-semibold">{client.full_name}</span><span className="text-xs text-warm-500">{goalLabels[client.goal]}</span></button>)}</div>}
           </div>
           <div className="grid gap-4">
             <SelectField label="جنسیت" value={input.gender} onChange={(value) => setField("gender", value as Gender)} options={genderLabels} />
@@ -1729,293 +1993,134 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
 
 function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; setSettings: (settings: Settings) => void; toast: ToastFn }) {
   const [form, setForm] = useState(settings);
+  const [mode, setMode] = useState<"simple" | "advanced">("simple");
   const [credentials, setCredentials] = useState({ current_password: "", username: settings.username || "admin", password: "", repeat: "" });
   const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [serviceEditor, setServiceEditor] = useState<ServiceCatalogItem>({ ...emptyServiceEditor });
-  const [serviceLoading, setServiceLoading] = useState(false);
+  const [visitModes, setVisitModes] = useState<VisitModeOption[]>([]);
+  const [visitModeEditor, setVisitModeEditor] = useState<VisitModeOption>({ ...emptyVisitModeEditor });
+  const [loading, setLoading] = useState(false);
   useEffect(() => setForm(settings), [settings]);
   useEffect(() => {
     if (!isDesktopRuntime()) return;
-    setServiceLoading(true);
-    invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false })
-      .then(setServiceCatalog)
-      .catch((error) => toast(getErrorMessage(error, "فهرست خدمات خوانده نشد."), "error"))
-      .finally(() => setServiceLoading(false));
-  }, [toast]);
+    setLoading(true);
+    Promise.all([
+      invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false }),
+      invoke<VisitModeOption[]>("list_visit_modes", { activeOnly: false }),
+    ]).then(([services, modes]) => { setServiceCatalog(services); setVisitModes(modes); })
+      .catch((error) => toast(getErrorMessage(error, "تنظیمات خدمات خوانده نشد."), "error"))
+      .finally(() => setLoading(false));
+  }, []);
 
   const save = async () => {
     try {
       const saved = isDesktopRuntime() ? await invoke<Settings>("save_settings", { settings: form }) : form;
-      setSettings(saved);
-      toast("تنظیمات ذخیره شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "ذخیره تنظیمات انجام نشد."), "error");
-    }
+      setSettings(saved); toast("تنظیمات ذخیره شد.");
+    } catch (error) { toast(getErrorMessage(error, "ذخیره تنظیمات انجام نشد."), "error"); }
   };
+  const chooseBrandImage = async (kind: "logo" | "background") => {
+    try {
+      const selected = await open({ multiple: false, filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "svg"] }] });
+      if (!selected || Array.isArray(selected)) return;
+      const imported = isDesktopRuntime() ? await invoke<string>("import_brand_asset", { path: selected, kind }) : selected;
+      setForm((current) => kind === "logo" ? { ...current, logo_path: imported } : { ...current, background_image_path: imported });
+      toast(kind === "logo" ? "لوگو کامل انتخاب شد؛ بعد از ذخیره بدون برش نمایش داده می‌شود." : "پس‌زمینه انتخاب شد؛ ذخیره را بزنید.");
+    } catch (error) { toast(getErrorMessage(error, "انتخاب تصویر انجام نشد."), "error"); }
+  };
+  const applyDietoyTheme = () => {
+    setForm((current) => ({ ...current, primary_color: dietoyTheme.primary_color, background_color: dietoyTheme.background_color, text_color: dietoyTheme.text_color }));
+    toast("پالت اصلی لوگوی دایتوری اعمال شد.");
+  };
+  const setCalcSetting = (key: CalcSettingKey, value: number) => setForm((current) => ({ ...current, [key]: Number.isFinite(value) ? value : defaultCalculationSettings[key] }));
   const changeCredentials = async () => {
-    if (!credentials.username.trim() || credentials.password.length < 4 || credentials.password !== credentials.repeat) {
-      toast("نام کاربری و رمز جدید را درست وارد کنید.", "error");
-      return;
-    }
+    if (!credentials.username.trim() || credentials.password.length < 4 || credentials.password !== credentials.repeat) { toast("نام کاربری و رمز جدید را درست وارد کنید.", "error"); return; }
     try {
       if (isDesktopRuntime()) await invoke("change_credentials", { input: { current_password: credentials.current_password, username: credentials.username, password: credentials.password } });
       setSettings({ ...settings, username: credentials.username });
       setCredentials({ current_password: "", username: credentials.username, password: "", repeat: "" });
       toast("اطلاعات ورود تغییر کرد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "رمز فعلی درست نیست یا تغییر انجام نشد."), "error");
-    }
+    } catch (error) { toast(getErrorMessage(error, "رمز فعلی درست نیست یا تغییر انجام نشد."), "error"); }
   };
-  const exportData = async () => {
-    try {
-      const path = await invoke<string>("export_data_backup");
-      toast(`فایل سبک ذخیره شد: ${path}`);
-    } catch (error) {
-      toast(getErrorMessage(error, "ساخت فایل پشتیبان انجام نشد."), "error");
-    }
-  };
-  const restoreData = async () => {
-    try {
-      const selected = await open({ multiple: false, filters: [{ name: "Dietoy backup", extensions: ["json"] }] });
-      if (!selected || Array.isArray(selected)) return;
-      await invoke("restore_data_backup", { path: selected });
-      const restored = await invoke<Settings>("get_settings");
-      setSettings(restored);
-      toast("اطلاعات قبلی بازیابی شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "بازیابی انجام نشد."), "error");
-    }
-  };
-  const exportSqlite = async () => {
-    try {
-      const path = await invoke<string>("export_database");
-      toast(`کپی SQLite ذخیره شد: ${path}`);
-    } catch (error) {
-      toast(getErrorMessage(error, "خروجی SQLite انجام نشد."), "error");
-    }
-  };
-  const chooseBrandImage = async (kind: "logo" | "background") => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Image", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif", "svg"] }],
-      });
-      if (!selected || Array.isArray(selected)) return;
-      const imported = isDesktopRuntime()
-        ? await invoke<string>("import_brand_asset", { path: selected, kind })
-        : selected;
-      setForm((current) =>
-        kind === "logo"
-          ? { ...current, logo_path: imported }
-          : { ...current, background_image_path: imported },
-      );
-      toast(kind === "logo" ? "لوگو انتخاب شد. ذخیره را بزنید." : "عکس پس‌زمینه انتخاب شد. ذخیره را بزنید.");
-    } catch (error) {
-      toast(getErrorMessage(error, "انتخاب تصویر انجام نشد."), "error");
-    }
-  };
-  const applyDietoyTheme = () => {
-    setForm((current) => ({
-      ...current,
-      primary_color: dietoyTheme.primary_color,
-      background_color: dietoyTheme.background_color,
-      text_color: dietoyTheme.text_color,
-    }));
-    toast("تم دایتوری اعمال شد. برای ماندن دائمی ذخیره را بزنید.");
-  };
-  const setCalcSetting = (key: CalcSettingKey, value: number) => {
-    setForm((current) => ({ ...current, [key]: Number.isFinite(value) ? value : defaultCalculationSettings[key] }));
-  };
+  const exportData = async () => { try { toast(`فایل پشتیبان ساخته شد: ${await invoke<string>("export_data_backup")}`); } catch (error) { toast(getErrorMessage(error, "ساخت فایل پشتیبان انجام نشد."), "error"); } };
+  const restoreData = async () => { try { const selected = await open({ multiple: false, filters: [{ name: "Dietoy backup", extensions: ["json"] }] }); if (!selected || Array.isArray(selected)) return; await invoke("restore_data_backup", { path: selected }); const restored = await invoke<Settings>("get_settings"); setSettings(restored); toast("اطلاعات قبلی بازیابی شد."); } catch (error) { toast(getErrorMessage(error, "بازیابی انجام نشد."), "error"); } };
+  const exportSqlite = async () => { try { toast(`کپی کامل پایگاه داده ساخته شد: ${await invoke<string>("export_database")}`); } catch (error) { toast(getErrorMessage(error, "خروجی SQLite انجام نشد."), "error"); } };
+
   const resetServiceEditor = (group: ServiceGroup = (serviceEditor.group_key ?? "diet") as ServiceGroup) => setServiceEditor({ ...emptyServiceEditor, group_key: group });
   const saveServiceDefinition = async () => {
-    if (!serviceEditor.name.trim()) {
-      toast("نام خدمت را وارد کنید.", "error");
-      return;
-    }
+    if (!serviceEditor.name.trim()) { toast("نام خدمت را وارد کنید.", "error"); return; }
     try {
-      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", {
-        item: {
-          ...serviceEditor,
-          group_key: serviceEditor.group_key ?? "other",
-          name: serviceEditor.name.trim(),
-          description: serviceEditor.description?.trim() ?? "",
-          default_price: Number(serviceEditor.default_price) || 0,
-          default_duration_minutes: serviceEditor.default_duration_minutes ? Number(serviceEditor.default_duration_minutes) : null,
-          body_area_required: Boolean(serviceEditor.body_area_required),
-          active: serviceEditor.active !== false,
-        },
-      });
-      setServiceCatalog((items) => {
-        const index = items.findIndex((item) => item.id === saved.id);
-        if (index < 0) return [...items, saved];
-        const next = [...items];
-        next[index] = saved;
-        return next;
-      });
-      resetServiceEditor((saved.group_key ?? "diet") as ServiceGroup);
-      toast(serviceEditor.id ? "خدمت ویرایش شد." : "خدمت جدید اضافه شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "ذخیره خدمت انجام نشد."), "error");
-    }
+      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", { item: { ...serviceEditor, group_key: serviceEditor.group_key ?? "other", name: serviceEditor.name.trim(), description: serviceEditor.description?.trim() ?? "", default_price: Number(serviceEditor.default_price) || 0, default_duration_minutes: serviceEditor.default_duration_minutes ? Number(serviceEditor.default_duration_minutes) : null, body_area_required: Boolean(serviceEditor.body_area_required), active: serviceEditor.active !== false } });
+      setServiceCatalog((items) => { const index = items.findIndex((item) => item.id === saved.id); if (index < 0) return [...items, saved]; const next = [...items]; next[index] = saved; return next; });
+      resetServiceEditor((saved.group_key ?? "diet") as ServiceGroup); toast(serviceEditor.id ? "خدمت ویرایش شد." : "خدمت جدید اضافه شد.");
+    } catch (error) { toast(getErrorMessage(error, "ذخیره خدمت انجام نشد."), "error"); }
   };
-  const editServiceDefinition = (item: ServiceCatalogItem) => setServiceEditor({ ...emptyServiceEditor, ...item });
-  const toggleServiceDefinition = async (item: ServiceCatalogItem) => {
+  const toggleServiceDefinition = async (item: ServiceCatalogItem) => { try { const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", { item: { ...item, active: item.active === false } }); setServiceCatalog((items) => items.map((entry) => entry.id === saved.id ? saved : entry)); toast(saved.active ? "خدمت فعال شد." : "خدمت غیرفعال شد."); } catch (error) { toast(getErrorMessage(error, "تغییر وضعیت خدمت انجام نشد."), "error"); } };
+
+  const saveVisitModeDefinition = async () => {
+    if (!visitModeEditor.name.trim()) { toast("نام شیوه ویزیت را وارد کنید.", "error"); return; }
     try {
-      const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", { item: { ...item, active: item.active === false } });
-      setServiceCatalog((items) => items.map((entry) => entry.id === saved.id ? saved : entry));
-      if (serviceEditor.id === saved.id) setServiceEditor(saved);
-      toast(saved.active ? "خدمت فعال شد." : "خدمت غیرفعال شد.");
-    } catch (error) {
-      toast(getErrorMessage(error, "تغییر وضعیت خدمت انجام نشد."), "error");
-    }
+      const saved = await invoke<VisitModeOption>("save_visit_mode", { item: { ...visitModeEditor, name: visitModeEditor.name.trim() } });
+      setVisitModes((items) => { const index = items.findIndex((item) => item.id === saved.id); if (index < 0) return [...items, saved]; const next = [...items]; next[index] = saved; return next; });
+      setVisitModeEditor({ ...emptyVisitModeEditor }); toast(visitModeEditor.id ? "شیوه ویزیت ویرایش شد." : "شیوه ویزیت اضافه شد.");
+    } catch (error) { toast(getErrorMessage(error, "ذخیره شیوه ویزیت انجام نشد."), "error"); }
   };
+  const toggleVisitMode = async (item: VisitModeOption) => { try { const saved = await invoke<VisitModeOption>("save_visit_mode", { item: { ...item, active: !item.active } }); setVisitModes((items) => items.map((entry) => entry.id === saved.id ? saved : entry)); } catch (error) { toast(getErrorMessage(error, "تغییر شیوه ویزیت انجام نشد."), "error"); } };
 
   return (
     <>
-      <PageHeader title="تنظیمات" subtitle="شخصی‌سازی مطب، تغییر ورود و پشتیبان‌گیری برای آپدیت‌های آینده." action={<PrimaryButton icon={Save} onClick={save}>ذخیره</PrimaryButton>} />
-      <section className="grid gap-5 xl:grid-cols-[1fr_0.75fr]">
-        <div className="card p-6">
-          <div className="grid gap-5 md:grid-cols-2">
-            <div className="md:col-span-2 rounded-control border border-warm-100 bg-warm-50 p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-bold">{dietoyTheme.name}</p>
-                  <p className="helper mt-1">پس‌زمینه برند با HEX #10517A و نوشته روشن برای صفحه‌های اصلی.</p>
+      <PageHeader title="تنظیمات" subtitle="تنظیمات ساده برای کارهای روزمره؛ گزینه‌های تخصصی فقط در حالت پیشرفته نمایش داده می‌شوند." action={<PrimaryButton icon={Save} onClick={save}>ذخیره همه تغییرات</PrimaryButton>} />
+      <div className="settings-mode-switch mb-5"><button className={cn(mode === "simple" && "active")} onClick={() => setMode("simple")}><Sparkles size={19} /> ساده و روزمره</button><button className={cn(mode === "advanced" && "active")} onClick={() => setMode("advanced")}><SettingsIcon size={19} /> پیشرفته</button></div>
+
+      {mode === "simple" && <div className="grid gap-5">
+        <section className="card p-6 motion-enter">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between"><div><div className="flex items-center gap-2"><Palette className="text-sage" /><h2 className="text-xl font-bold">هویت دایتوری</h2></div><p className="helper mt-2">لوگو با نسبت اصلی و بدون برش در ورود، منو و گزارش‌ها استفاده می‌شود.</p></div><BrandLogo settings={{ ...form }} className="h-36 w-64" full /></div>
+          <div className="mt-6 grid gap-4 md:grid-cols-2"><TextField label="نام متخصص تغذیه" value={form.dietitian_name} onChange={(value) => setForm({ ...form, dietitian_name: value })} /><TextField label="نام کلینیک" value={form.clinic_name} onChange={(value) => setForm({ ...form, clinic_name: value })} /></div>
+          <div className="mt-5 flex flex-wrap gap-3"><SecondaryButton icon={ImageIcon} onClick={() => chooseBrandImage("logo")}>انتخاب لوگوی کامل</SecondaryButton><SecondaryButton icon={Palette} onClick={applyDietoyTheme}>اعمال رنگ‌های لوگو</SecondaryButton></div>
+        </section>
+
+        <section className="card p-6 motion-enter motion-delay-1"><div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><ClipboardList className="text-sage" /><h2 className="text-xl font-bold">خدمات کلینیک</h2></div><p className="helper mt-2">هر تعداد خدمت تعریف کنید؛ در هر ویزیت هم می‌توان چند خدمت را با هم انتخاب کرد.</p></div><span className="pill-soft">{formatNumber(serviceCatalog.filter((x) => x.active).length)} فعال</span></div>
+          <div className="settings-service-grid mt-6"><div className="service-editor-card"><h3 className="font-bold">{serviceEditor.id ? "ویرایش خدمت" : "خدمت جدید"}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2"><SelectField label="گروه" value={(serviceEditor.group_key ?? "other") as string} onChange={(value) => setServiceEditor({ ...serviceEditor, group_key: value as ServiceGroup })} options={serviceGroupLabels} /><TextField label="نام خدمت" value={serviceEditor.name} onChange={(value) => setServiceEditor({ ...serviceEditor, name: value })} /><NumberField label="قیمت پیش‌فرض" value={serviceEditor.default_price} onChange={(value) => setServiceEditor({ ...serviceEditor, default_price: value })} suffix="تومان" /><OptionalNumberField label="مدت" value={serviceEditor.default_duration_minutes ? String(serviceEditor.default_duration_minutes) : ""} onChange={(value) => setServiceEditor({ ...serviceEditor, default_duration_minutes: value ? Number(value) : null })} suffix="دقیقه" /><div className="sm:col-span-2"><TextField label="توضیح" value={serviceEditor.description ?? ""} onChange={(value) => setServiceEditor({ ...serviceEditor, description: value })} /></div></div><div className="mt-4 flex gap-4"><label className="toggle-row"><input type="checkbox" checked={serviceEditor.body_area_required} onChange={(e) => setServiceEditor({ ...serviceEditor, body_area_required: e.target.checked })} /> ناحیه بدن لازم است</label><label className="toggle-row"><input type="checkbox" checked={serviceEditor.active !== false} onChange={(e) => setServiceEditor({ ...serviceEditor, active: e.target.checked })} /> فعال</label></div><div className="mt-4 flex gap-2"><PrimaryButton icon={Save} onClick={saveServiceDefinition}>{serviceEditor.id ? "ذخیره" : "افزودن"}</PrimaryButton>{serviceEditor.id && <SecondaryButton onClick={() => resetServiceEditor()}>انصراف</SecondaryButton>}</div></div>
+            <div className="grid gap-3">{loading ? <SkeletonRows /> : serviceGroupKeys.map((group) => { const items = serviceCatalog.filter((x) => (x.group_key ?? "other") === group); if (!items.length) return null; return <div key={group} className="service-settings-group"><strong>{serviceGroupLabels[group]}</strong><div className="mt-3 grid gap-2">{items.map((item) => <div key={item.id ?? item.name} className={cn("service-settings-row", !item.active && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{formatNumber(item.default_price)} تومان</small></div><div className="flex gap-2"><button className="mini-action" onClick={() => setServiceEditor({ ...emptyServiceEditor, ...item })}><Pencil size={15} /> ویرایش</button><button className="mini-action" onClick={() => toggleServiceDefinition(item)}>{item.active ? "غیرفعال" : "فعال"}</button></div></div>)}</div></div>; })}</div></div>
+        </section>
+
+        <section className="card p-6"><div className="flex items-center gap-2"><Video className="text-sage" /><h2 className="text-xl font-bold">شیوه‌های ویزیت</h2></div><p className="helper mt-2">حضوری و آنلاین پیش‌فرض هستند؛ عنوان‌های دیگر مثل تلفنی یا منزل را هم اضافه کنید.</p><div className="settings-service-grid mt-5"><div className="service-editor-card"><div className="grid gap-3"><TextField label="نام شیوه" value={visitModeEditor.name} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, name: value })} placeholder="مثلاً تلفنی" /><TextField label="توضیح" value={visitModeEditor.description ?? ""} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, description: value })} /></div><div className="mt-4 flex gap-2"><PrimaryButton icon={Plus} onClick={saveVisitModeDefinition}>{visitModeEditor.id ? "ذخیره" : "افزودن"}</PrimaryButton>{visitModeEditor.id && <SecondaryButton onClick={() => setVisitModeEditor({ ...emptyVisitModeEditor })}>انصراف</SecondaryButton>}</div></div><div className="grid gap-2">{visitModes.map((item) => <div key={item.id ?? item.key} className={cn("service-settings-row", !item.active && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{item.description || visitModeDefaultLabels[item.key] || "شیوه مراجعه"}</small></div><div className="flex gap-2"><button className="mini-action" onClick={() => setVisitModeEditor(item)}><Pencil size={15} /> ویرایش</button><button className="mini-action" onClick={() => toggleVisitMode(item)}>{item.active ? "غیرفعال" : "فعال"}</button></div></div>)}</div></div></section>
+
+        <section className="card p-6"><div className="flex items-center gap-2"><Database className="text-sage" /><h2 className="text-xl font-bold">پشتیبان‌گیری امن</h2></div><p className="helper mt-2">قبل از هر آپدیت یک خروجی سبک و یک کپی کامل SQLite بگیرید.</p><div className="mt-5 flex flex-wrap gap-3"><SecondaryButton icon={Download} onClick={exportData}>خروجی سبک</SecondaryButton><SecondaryButton icon={Database} onClick={exportSqlite}>کپی کامل SQLite</SecondaryButton><SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی</SecondaryButton></div></section>
+      </div>}
+
+      {mode === "advanced" && <div className="grid gap-5">
+        <section className="card p-6"><div className="flex items-center gap-2"><Palette className="text-sage" /><h2 className="text-xl font-bold">رنگ و پس‌زمینه</h2></div><div className="mt-5 grid gap-4 md:grid-cols-3"><ColorField label="رنگ اصلی" value={colorValue(form.primary_color, defaultSettings.primary_color)} onChange={(value) => setForm({ ...form, primary_color: value })} /><ColorField label="پس‌زمینه" value={colorValue(form.background_color, defaultSettings.background_color)} onChange={(value) => setForm({ ...form, background_color: value })} /><ColorField label="رنگ نوشته" value={colorValue(form.text_color, defaultSettings.text_color)} onChange={(value) => setForm({ ...form, text_color: value })} /></div><div className="mt-5"><SecondaryButton icon={ImageIcon} onClick={() => chooseBrandImage("background")}>انتخاب تصویر پس‌زمینه</SecondaryButton></div></section>
+        <section className="card p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold">تنظیمات محاسبات</h2>
+              <p className="helper mt-2">فقط در صورت تغییر پروتکل کلینیک ویرایش شود.</p>
+            </div>
+            <span className="pill-soft">پیشرفته</span>
+          </div>
+          <div className="mt-5 grid gap-5">
+            {calculationSettingGroups.map((group) => (
+              <div key={group.title} className="rounded-card border border-warm-100 p-5">
+                <h3 className="font-bold">{group.title}</h3>
+                <p className="helper mt-1">{group.description}</p>
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
+                  {group.fields.map((field) => (
+                    <NumberField
+                      key={field.key}
+                      label={field.label}
+                      value={Number(form[field.key] ?? defaultCalculationSettings[field.key])}
+                      onChange={(value) => setCalcSetting(field.key, value)}
+                      suffix=""
+                    />
+                  ))}
                 </div>
-                <SecondaryButton icon={Palette} onClick={applyDietoyTheme}>اعمال تم</SecondaryButton>
               </div>
-            </div>
-            <TextField label="نام متخصص تغذیه" value={form.dietitian_name} onChange={(value) => setForm({ ...form, dietitian_name: value })} />
-            <TextField label="نام کلینیک" value={form.clinic_name} onChange={(value) => setForm({ ...form, clinic_name: value })} />
-            <div>
-              <label className="label">رنگ اصلی</label>
-              <div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-3">
-                <Palette size={19} className="text-warm-500" />
-                <input type="color" value={colorValue(form.primary_color, defaultSettings.primary_color)} onChange={(event) => setForm({ ...form, primary_color: event.target.value })} className="h-8 w-12 cursor-pointer border-0 bg-transparent p-0" />
-                <input value={form.primary_color} onChange={(event) => setForm({ ...form, primary_color: event.target.value })} className="numbers min-w-0 flex-1 border-0 bg-transparent text-sm outline-none" />
-              </div>
-            </div>
-            <div>
-              <label className="label">رنگ پس‌زمینه</label>
-              <div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-3">
-                <Palette size={19} className="text-warm-500" />
-                <input type="color" value={colorValue(form.background_color, defaultSettings.background_color)} onChange={(event) => setForm({ ...form, background_color: event.target.value })} className="h-8 w-12 cursor-pointer border-0 bg-transparent p-0" />
-                <input value={form.background_color || defaultSettings.background_color} onChange={(event) => setForm({ ...form, background_color: event.target.value })} className="numbers min-w-0 flex-1 border-0 bg-transparent text-sm outline-none" />
-              </div>
-            </div>
-            <div>
-              <label className="label">رنگ نوشته‌ها</label>
-              <div className="mt-2 flex h-12 items-center gap-3 rounded-control border border-warm-200 bg-white px-3">
-                <Palette size={19} className="text-warm-500" />
-                <input type="color" value={colorValue(form.text_color, defaultSettings.text_color)} onChange={(event) => setForm({ ...form, text_color: event.target.value })} className="h-8 w-12 cursor-pointer border-0 bg-transparent p-0" />
-                <input value={form.text_color || defaultSettings.text_color} onChange={(event) => setForm({ ...form, text_color: event.target.value })} className="numbers min-w-0 flex-1 border-0 bg-transparent text-sm outline-none" />
-              </div>
-            </div>
-            <div className="md:col-span-2">
-              <label className="label">لوگو و عکس پس‌زمینه</label>
-              <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                <button type="button" onClick={() => chooseBrandImage("logo")} className="soft-transition flex h-16 items-center justify-between rounded-control border border-warm-200 bg-white px-4 text-sm font-semibold hover:bg-warm-50">
-                  <span className="flex items-center gap-2"><ImageIcon size={19} /> انتخاب لوگو</span>
-                  {form.logo_path && <span className="text-xs text-olive">انتخاب شده</span>}
-                </button>
-                <button type="button" onClick={() => chooseBrandImage("background")} className="soft-transition flex h-16 items-center justify-between rounded-control border border-warm-200 bg-white px-4 text-sm font-semibold hover:bg-warm-50">
-                  <span className="flex items-center gap-2"><ImageIcon size={19} /> انتخاب بک‌گراند</span>
-                  {form.background_image_path && <span className="text-xs text-olive">انتخاب شده</span>}
-                </button>
-              </div>
-              <p className="helper mt-3">برای لوگوی پیش‌فرض نسخه نصبی، فایل لوگو را با نام logo.png داخل پوشه public پروژه بگذارید.</p>
-            </div>
-            <div className="md:col-span-2 rounded-card border border-warm-100 bg-warm-50 p-5">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Calculator size={21} className="text-sage" />
-                    <h2 className="text-lg font-bold">تنظیمات محاسبات</h2>
-                  </div>
-                  <p className="helper mt-2">این بخش روی محاسبات بعدی اثر دارد. برای نسخه مشتری، مقدارهای پیش‌فرض فعلی مناسب و ساده‌اند.</p>
-                </div>
-                <span className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-olive">پروتکل تغذیه</span>
-              </div>
-              <div className="mt-5 grid gap-4">
-                {calculationSettingGroups.map((group) => (
-                  <div key={group.title} className="rounded-card border border-warm-100 bg-white p-4">
-                    <div className="mb-4">
-                      <p className="text-sm font-bold text-charcoal">{group.title}</p>
-                      <p className="helper mt-1">{group.description}</p>
-                    </div>
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      {group.fields.map((field) => (
-                        <SettingNumberField
-                          key={field.key}
-                          label={field.label}
-                          value={Number(form[field.key] ?? defaultCalculationSettings[field.key])}
-                          step={field.step}
-                          onChange={(value) => setCalcSetting(field.key, value)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            ))}
           </div>
-        </div>
-        <div className="grid gap-5">
-          <div className="card p-6">
-            <KeyRound className="text-sage" size={28} />
-            <h2 className="mt-5 text-xl font-bold">ورود به برنامه</h2>
-            <p className="mt-3 text-sm leading-7 text-warm-500">نام کاربری و رمز اولیه admin است. قبل از تحویل به مشتری تغییر دهید.</p>
-            <div className="mt-5 grid gap-4">
-              <TextField label="نام کاربری جدید" value={credentials.username} onChange={(value) => setCredentials({ ...credentials, username: value })} />
-              <PasswordField label="رمز فعلی" value={credentials.current_password} onChange={(value) => setCredentials({ ...credentials, current_password: value })} />
-              <PasswordField label="رمز جدید" value={credentials.password} onChange={(value) => setCredentials({ ...credentials, password: value })} />
-              <PasswordField label="تکرار رمز جدید" value={credentials.repeat} onChange={(value) => setCredentials({ ...credentials, repeat: value })} />
-            </div>
-            <div className="mt-6"><SecondaryButton icon={KeyRound} onClick={changeCredentials}>تغییر اطلاعات ورود</SecondaryButton></div>
-          </div>
-          <div className="card p-6">
-            <Database className="text-sage" size={28} />
-            <h2 className="mt-5 text-xl font-bold">پشتیبان و آپدیت</h2>
-            <p className="mt-3 text-sm leading-7 text-warm-500">برای آپدیت فقط فایل JSON سبک را از مشتری بگیرید و بعد از نصب نسخه جدید بازیابی کنید.</p>
-            <div className="mt-6 grid gap-3">
-              <SecondaryButton icon={Download} onClick={exportData}>خروجی سبک برای آپدیت</SecondaryButton>
-              <SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی اطلاعات قبلی</SecondaryButton>
-              <SecondaryButton icon={Database} onClick={exportSqlite}>خروجی کامل SQLite</SecondaryButton>
-            </div>
-          </div>
-        </div>
-      </section>
-      <section className="card mt-5 p-6 motion-enter">
-        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-          <div><div className="flex items-center gap-2"><ClipboardList className="text-sage" size={24} /><h2 className="text-xl font-bold">تعریف خدمات</h2></div><p className="helper mt-2">خدمات کلینیک را گروه‌بندی کنید. آیتم‌های غیرفعال از انتخاب‌های جدید حذف می‌شوند اما تاریخچه ویزیت‌ها حفظ می‌شود.</p></div>
-          <span className="pill-soft">{formatNumber(serviceCatalog.filter((item) => item.active !== false).length)} خدمت فعال</span>
-        </div>
-        <div className="settings-service-grid mt-6">
-          <div className="service-editor-card">
-            <div className="flex items-center justify-between"><h3 className="text-lg font-bold">{serviceEditor.id ? "ویرایش خدمت" : "خدمت جدید"}</h3>{serviceEditor.id && <button type="button" className="icon-close-button" onClick={() => resetServiceEditor()} aria-label="بستن ویرایش"><X size={18} /></button>}</div>
-            <div className="mt-5 grid gap-4 sm:grid-cols-2">
-              <SelectField label="گروه خدمت" value={(serviceEditor.group_key ?? "other") as string} onChange={(value) => setServiceEditor({ ...serviceEditor, group_key: value as ServiceGroup })} options={serviceGroupLabels} />
-              <TextField label="نام خدمت" value={serviceEditor.name} onChange={(value) => setServiceEditor({ ...serviceEditor, name: value })} placeholder="مثلاً رژیم کاهش وزن" />
-              <NumberField label="قیمت پیش‌فرض" value={serviceEditor.default_price} onChange={(value) => setServiceEditor({ ...serviceEditor, default_price: value })} suffix="تومان" />
-              <OptionalNumberField label="مدت زمان" value={serviceEditor.default_duration_minutes ? String(serviceEditor.default_duration_minutes) : ""} onChange={(value) => setServiceEditor({ ...serviceEditor, default_duration_minutes: value ? Number(value) : null })} suffix="دقیقه" max={600} />
-              <div className="sm:col-span-2"><TextField label="توضیح کوتاه" value={serviceEditor.description ?? ""} onChange={(value) => setServiceEditor({ ...serviceEditor, description: value })} placeholder="کاربرد یا جزئیات آیتم" /></div>
-            </div>
-            <div className="mt-4 flex flex-wrap gap-4">
-              <label className="toggle-row"><input type="checkbox" checked={serviceEditor.body_area_required} onChange={(event) => setServiceEditor({ ...serviceEditor, body_area_required: event.target.checked })} /><span>ناحیه بدن لازم است</span></label>
-              <label className="toggle-row"><input type="checkbox" checked={serviceEditor.active !== false} onChange={(event) => setServiceEditor({ ...serviceEditor, active: event.target.checked })} /><span>فعال</span></label>
-            </div>
-            <div className="mt-5 flex gap-3"><PrimaryButton icon={Save} onClick={saveServiceDefinition}>{serviceEditor.id ? "ذخیره تغییرات" : "افزودن خدمت"}</PrimaryButton>{serviceEditor.id && <SecondaryButton onClick={() => resetServiceEditor()}>انصراف</SecondaryButton>}</div>
-          </div>
-          <div className="grid gap-4">
-            {serviceLoading ? <SkeletonRows /> : serviceGroupKeys.map((group) => {
-              const items = serviceCatalog.filter((item) => (item.group_key ?? "other") === group);
-              if (!items.length) return null;
-              return <div key={group} className="service-settings-group"><div className="mb-3 flex items-center justify-between"><strong>{serviceGroupLabels[group]}</strong><span className="numbers text-xs text-warm-500">{formatNumber(items.length)} آیتم</span></div><div className="grid gap-2">{items.map((item) => <div key={item.id ?? item.name} className={cn("service-settings-row", item.active === false && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{item.description || `${formatNumber(item.default_price)} تومان`}</small></div><div className="flex items-center gap-2"><button type="button" className="mini-action" onClick={() => editServiceDefinition(item)}><Pencil size={16} /> ویرایش</button><button type="button" className="mini-action" onClick={() => toggleServiceDefinition(item)}>{item.active === false ? "فعال‌سازی" : "غیرفعال"}</button></div></div>)}</div></div>;
-            })}
-            {!serviceLoading && serviceCatalog.length === 0 && <EmptyState icon={ClipboardList} title="خدمتی تعریف نشده" text="اولین خدمت را از فرم کنار صفحه اضافه کنید." />}
-          </div>
-        </div>
-      </section>
+        </section>
+        <section className="card p-6"><div className="flex items-center gap-2"><FileText className="text-sage" /><h2 className="text-xl font-bold">قالب چاپ برنامه غذایی</h2></div><p className="helper mt-2">برای چاپ روی سربرگ، حاشیه را بیشتر کنید و نمایش لوگو را خاموش کنید.</p><div className="mt-5 grid gap-4 md:grid-cols-2"><TextField label="عنوان اصلی" value={form.diet_plan_header_title ?? ""} onChange={(value) => setForm({ ...form, diet_plan_header_title: value })} /><NumberField label="حاشیه چاپ" value={Number(form.diet_plan_margin_mm ?? 14)} onChange={(value) => setForm({ ...form, diet_plan_margin_mm: value })} suffix="میلی‌متر" /><div className="md:col-span-2"><TextField label="متن پایین صفحه" value={form.diet_plan_footer_text ?? ""} onChange={(value) => setForm({ ...form, diet_plan_footer_text: value })} /></div></div><div className="mt-4 flex flex-wrap gap-4"><label className="toggle-row"><input type="checkbox" checked={form.diet_plan_show_logo !== false} onChange={(e) => setForm({ ...form, diet_plan_show_logo: e.target.checked })} /> نمایش لوگو</label><label className="toggle-row"><input type="checkbox" checked={form.diet_plan_show_calories !== false} onChange={(e) => setForm({ ...form, diet_plan_show_calories: e.target.checked })} /> نمایش کالری</label><label className="toggle-row"><input type="checkbox" checked={form.diet_plan_show_macros !== false} onChange={(e) => setForm({ ...form, diet_plan_show_macros: e.target.checked })} /> نمایش ماکروها</label></div></section>
+        <section className="card p-6"><div className="flex items-center gap-2"><KeyRound className="text-sage" /><h2 className="text-xl font-bold">ورود و امنیت</h2></div><div className="mt-5 grid gap-4 md:grid-cols-2"><TextField label="نام کاربری جدید" value={credentials.username} onChange={(value) => setCredentials({ ...credentials, username: value })} /><PasswordField label="رمز فعلی" value={credentials.current_password} onChange={(value) => setCredentials({ ...credentials, current_password: value })} /><PasswordField label="رمز جدید" value={credentials.password} onChange={(value) => setCredentials({ ...credentials, password: value })} /><PasswordField label="تکرار رمز" value={credentials.repeat} onChange={(value) => setCredentials({ ...credentials, repeat: value })} /></div><div className="mt-5"><SecondaryButton icon={KeyRound} onClick={changeCredentials}>تغییر اطلاعات ورود</SecondaryButton></div></section>
+      </div>}
     </>
   );
 }
@@ -2151,6 +2256,30 @@ function TextField({ label, value, onChange, placeholder, error }: { label: stri
 
 function PasswordField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return <div><label className="label">{label}</label><input className="control mt-2 w-full" type="password" value={value} onChange={(event) => onChange(event.target.value)} autoComplete="new-password" /></div>;
+}
+
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <div>
+      <label className="label">{label}</label>
+      <div className="control mt-2 flex items-center gap-3 px-3">
+        <input
+          type="color"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-8 w-12 cursor-pointer rounded-lg border-0 bg-transparent p-0"
+          aria-label={label}
+        />
+        <input
+          className="numbers min-w-0 flex-1 border-0 bg-transparent text-left outline-none"
+          dir="ltr"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onBlur={(event) => onChange(colorValue(event.target.value, value))}
+        />
+      </div>
+    </div>
+  );
 }
 
 function IconInput({ icon: Icon, label, value, onChange, type = "text", autoComplete }: { icon: typeof UserRound; label: string; value: string; onChange: (value: string) => void; type?: string; autoComplete?: string }) {
