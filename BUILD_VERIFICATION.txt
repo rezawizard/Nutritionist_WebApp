@@ -1,0 +1,14 @@
+Dietoy v4.7 verification
+
+Frontend TypeScript/Vite:
+- npm run build: PASSED
+
+Rust source syntax:
+- tree-sitter Rust parse: PASSED (no syntax errors)
+
+Not executed in this environment:
+- cargo build
+- Tauri/NSIS installer build
+
+Final Rust/installer validation must be performed by GitHub Actions workflow:
+USE THIS - Dietoy Final Installer
