@@ -4,7 +4,7 @@ Dim shell, fso, folder, file, installer, command, appData, source, backupRoot, b
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 folder = fso.GetParentFolderName(WScript.ScriptFullName)
-installer = fso.BuildPath(folder, "Dietoy-FINAL-0.3.0-Setup.exe")
+installer = fso.BuildPath(folder, "Dietory-5.0.0-Setup.exe")
 
 If Not fso.FileExists(installer) Then
   installer = ""
@@ -19,13 +19,13 @@ If Not fso.FileExists(installer) Then
 End If
 
 If installer = "" Then
-  MsgBox "Setup file was not found. Keep INSTALL.vbs beside Dietoy-FINAL-0.3.0-Setup.exe.", vbCritical, "Dietoy"
+  MsgBox "Setup file was not found. Keep INSTALL.vbs beside Dietory-5.0.0-Setup.exe.", vbCritical, "Dietory"
   WScript.Quit 1
 End If
 
 appData = shell.ExpandEnvironmentStrings("%APPDATA%")
 source = fso.BuildPath(appData, "com.rezo.persian-dietitian")
-backupRoot = fso.BuildPath(shell.SpecialFolders("MyDocuments"), "Dietoy Update Backups")
+backupRoot = fso.BuildPath(shell.SpecialFolders("MyDocuments"), "Dietory Update Backups")
 backupFolder = fso.BuildPath(backupRoot, "pre-install-backup")
 
 On Error Resume Next
@@ -38,4 +38,4 @@ On Error GoTo 0
 
 command = """" & installer & """"
 shell.Run command, 1, True
-MsgBox "Installation finished. Existing Dietoy data is kept. A safety backup is stored in Documents\\Dietoy Update Backups when previous data exists.", vbInformation, "Dietoy"
+MsgBox "Installation finished. Existing Dietory data is kept. A safety backup is stored in Documents\\Dietory Update Backups when previous data exists.", vbInformation, "Dietory"

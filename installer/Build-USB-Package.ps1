@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $releaseDir = Join-Path $root "release-usb"
 $bundleDir = Join-Path $root "src-tauri\target\release\bundle\nsis"
-$setupName = "Dietoy-FINAL-0.3.0-Setup.exe"
+$setupName = "Dietory-5.0.0-Setup.exe"
 $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
 Set-Location $root
@@ -39,6 +39,8 @@ Copy-Item $setup.FullName (Join-Path $releaseDir $setupName) -Force
 Copy-Item (Join-Path $PSScriptRoot "Customer-Install.vbs") (Join-Path $releaseDir "INSTALL.vbs") -Force
 Copy-Item (Join-Path $PSScriptRoot "Customer-Install-Silent.vbs") (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
 Copy-Item (Join-Path $PSScriptRoot "README-USB.txt") $releaseDir -Force
+$guidePath = Join-Path $root "docs\Dietory_User_Guide_FA.pdf"
+if (Test-Path $guidePath) { Copy-Item $guidePath (Join-Path $releaseDir "Dietory-Guide-FA.pdf") -Force }
 
 Write-Host ""
 Write-Host "USB package is ready:"

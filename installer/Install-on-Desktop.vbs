@@ -16,10 +16,10 @@ For Each file In fso.GetFolder(folder).Files
 Next
 
 If installer = "" Then
-  MsgBox "Installer EXE was not found in this folder. Put Dietoy-FINAL-0.3.0-Setup.exe beside this VBS file.", vbCritical, "Dietoy"
+  MsgBox "Installer EXE was not found in this folder. Put Dietory-5.0.0-Setup.exe beside this VBS file.", vbCritical, "Dietory"
   WScript.Quit 1
 End If
 
 command = """" & installer & """"
 shell.Run command, 1, True
-MsgBox "Installation finished. The desktop shortcut should now be available.", vbInformation, "Dietoy"
+MsgBox "Installation finished. The desktop shortcut should now be available.", vbInformation, "Dietory"
