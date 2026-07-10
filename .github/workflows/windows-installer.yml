@@ -20,7 +20,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.14.0
           cache: npm
 
       - name: Setup Rust
@@ -31,12 +31,23 @@ jobs:
         run: |
           git rev-parse HEAD
           git branch --show-current
+          node --version
+          npm --version
           Get-ChildItem -Force
           Get-ChildItem src-tauri -Force
           Get-ChildItem installer -Force
 
+      - name: Configure npm network retries
+        shell: pwsh
+        run: |
+          npm config set fetch-retries 5
+          npm config set fetch-retry-factor 2
+          npm config set fetch-retry-mintimeout 20000
+          npm config set fetch-retry-maxtimeout 120000
+          npm config set fetch-timeout 300000
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund --prefer-online
 
       - name: Build frontend
         run: npm run build
