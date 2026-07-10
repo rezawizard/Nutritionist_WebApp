@@ -1,6 +1,6 @@
 [package]
 name = "persian_dietitian_desktop"
-version = "0.3.0"
+version = "5.0.0"
 description = "Offline-first Persian dietitian desktop app"
 authors = ["Rezo"]
 edition = "2021"
@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 dirs-next = "2"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

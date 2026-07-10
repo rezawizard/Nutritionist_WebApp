@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Dietoy",
-  "version": "0.3.0",
+  "productName": "Dietory",
+  "version": "5.0.0",
   "identifier": "com.rezo.persian-dietitian",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Dietoy",
+        "title": "Dietory",
         "width": 1280,
         "height": 840,
         "minWidth": 1040,
@@ -57,7 +57,7 @@
         ],
         "displayLanguageSelector": false,
         "compression": "lzma",
-        "startMenuFolder": "Dietoy",
+        "startMenuFolder": "Dietory",
         "installerHooks": "nsis/desktop-shortcut.nsh"
       }
     }
