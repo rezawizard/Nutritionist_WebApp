@@ -82,8 +82,10 @@ import {
   dietMealTotals,
   visitModeDefaultLabels,
 } from "./lib";
-import type { ActivityLevel, Attachment, AttachmentCategory, CareTrackType, Client, DashboardStats, DietMeal, DietPlan, ExtendedMeasurements, Gender, Goal, NutritionCalculation, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitModeOption, VisitService, VisitType } from "./types";
+import type { ActivityLevel, Attachment, AttachmentCategory, CareTrack, CareTrackType, Client, ClientProfileBundle, DashboardStats, DietMeal, DietPlan, ExtendedMeasurements, Gender, Goal, NutritionCalculation, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitModeOption, VisitService, VisitType } from "./types";
 import type { ClientRecord } from "./types";
+import BodyAnalysisViewer from "./components/BodyAnalysisViewer";
+import ClientTrendChart from "./components/ClientTrendChart";
 
 const defaultSettings: Settings = {
   dietitian_name: "",
@@ -519,7 +521,7 @@ function BrandLogo({ settings, className = "h-12 w-12", full = false }: { settin
   }
   return (
     <div className={cn("brand-logo-frame grid place-items-center overflow-hidden rounded-control", full && "brand-logo-full", className)}>
-      <img src={logo} alt="Dietoy" className="h-full w-full object-contain" onError={() => setFailed(true)} />
+      <img src={logo} alt="Dietory" className="h-full w-full object-contain" onError={() => setFailed(true)} />
     </div>
   );
 }
@@ -529,7 +531,7 @@ function Brand({ settings }: { settings: Settings }) {
     <div className="flex items-center gap-3">
       <BrandLogo settings={settings} className="h-14 w-14" />
       <div>
-        <p className="text-lg font-bold">{settings.clinic_name || "Dietoy"}</p>
+        <p className="text-lg font-bold">{settings.clinic_name || "Dietory"}</p>
         <p className="mt-1 text-xs text-warm-500">{settings.dietitian_name || "مدیریت حرفه‌ای تغذیه"}</p>
       </div>
     </div>
@@ -622,6 +624,7 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
   const [exactDate, setExactDate] = useState(todayIsoDate());
   const [rangeStart, setRangeStart] = useState(todayIsoDate());
   const [rangeEnd, setRangeEnd] = useState(addDaysToIso(todayIsoDate(), 7));
+  const [dashboardError, setDashboardError] = useState("");
 
   useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -629,7 +632,13 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
       return;
     }
     setStats(null);
-    invoke<DashboardStats>("dashboard_stats").then(setStats).catch(() => setStats(emptyDashboardStats));
+    setDashboardError("");
+    invoke<DashboardStats>("dashboard_stats")
+      .then(setStats)
+      .catch((error) => {
+        setStats(emptyDashboardStats);
+        setDashboardError(getErrorMessage(error, "خواندن اطلاعات داشبورد انجام نشد."));
+      });
   }, [version]);
 
   const calendarVisits = useMemo(() => {
@@ -657,6 +666,7 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
         title="داشبورد روزانه"
         subtitle={`امروز ${formatPersianDate()} است. این صفحه فقط کارهای عملیاتی روز را نشان می‌دهد و برای شروع سریع ویزیت طراحی شده است.`}
       />
+      {dashboardError && <div className="mb-5"><ErrorSummary message={dashboardError} /></div>}
 
       <section className="daily-dashboard-grid motion-enter">
         <div className="card daily-hero p-6 md:p-7">
@@ -872,6 +882,11 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const [visitModes, setVisitModes] = useState<VisitModeOption[]>([]);
   const [nutritionCalculations, setNutritionCalculations] = useState<NutritionCalculation[]>([]);
   const [dietPlans, setDietPlans] = useState<DietPlan[]>([]);
+  const [careTracks, setCareTracks] = useState<CareTrack[]>([]);
+  const [targetWeightDraft, setTargetWeightDraft] = useState("");
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileLoadError, setProfileLoadError] = useState("");
+  const [profileReloadVersion, setProfileReloadVersion] = useState(0);
   const [profileCalcOverrides, setProfileCalcOverrides] = useState({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
   const [dietPlanDraft, setDietPlanDraft] = useState<DietPlan | null>(null);
   const [dietMealOpen, setDietMealOpen] = useState<string>("breakfast");
@@ -887,6 +902,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const [visitForm, setVisitForm] = useState({
     visit_date: todayIsoDate(),
     visit_time: "",
+    track_id: null as number | null,
     status: "completed",
     visit_type: "initial" as VisitType,
     visit_mode_key: "in_person",
@@ -905,6 +921,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     setVisitForm({
       visit_date: todayIsoDate(),
       visit_time: "",
+      track_id: null as number | null,
       status: "completed",
       visit_type: "initial" as VisitType,
       visit_mode_key: visitModes.find((item) => item.active)?.key ?? "in_person",
@@ -939,68 +956,79 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       setVisitModes([]);
       setNutritionCalculations([]);
       setDietPlans([]);
+      setCareTracks([]);
+      setProfileLoadError("");
       setDietPlanDraft(null);
       setVisitServices({});
       return;
     }
-    invoke<VisitDetail[]>("list_client_visits", { clientId: client.id })
-      .then((items) => {
-        setVisits(items);
-        const latestItem = items[items.length - 1];
-        setServiceForm((current) => ({ ...current, visitId: current.visitId || String(latestItem?.visit.id ?? "") }));
-        setRecords(
-          items
-            .filter((item) => item.measurements?.weight_kg)
-            .map((item) => ({
-              id: item.measurements?.id,
-              client_id: client.id!,
-              record_date: item.visit.visit_date,
-              weight_kg: item.measurements?.weight_kg ?? client.weight_kg,
-              height_cm: item.measurements?.height_cm ?? client.height_cm,
-              notes: item.measurements?.notes || item.visit.clinical_notes,
-              created_at: item.visit.created_at,
-              updated_at: item.visit.updated_at,
-            })),
-        );
-        return Promise.all(
-          items
-            .map((item) => item.visit.id)
-            .filter((id): id is number => typeof id === "number")
-            .map((visitId) => invoke<VisitService[]>("list_visit_services", { visitId }).then((services) => [visitId, services] as const)),
-        );
-      })
-      .then((serviceEntries) => {
-        if (!serviceEntries) return;
-        setVisitServices(Object.fromEntries(serviceEntries));
-      })
-      .catch(() => {
-        invoke<ClientRecord[]>("list_client_records", { clientId: client.id }).then(setRecords).catch(() => setRecords([]));
-      });
-    invoke<Attachment[]>("list_client_attachments", { clientId: client.id }).then(setAttachments).catch(() => setAttachments([]));
-    invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: true }).then((items) => {
-      setServiceCatalog(items);
-      setServiceForm((current) => {
-        const preferred = items.find((item) => (item.group_key ?? "other") === current.groupKey) ?? items[0];
-        if (!preferred) return { ...current, catalogId: "" };
-        return { ...current, groupKey: (preferred.group_key ?? "other") as ServiceGroup, catalogId: String(preferred.id ?? ""), price: preferred.default_price ?? 0 };
-      });
-    }).catch(() => setServiceCatalog([]));
-    invoke<VisitModeOption[]>("list_visit_modes", { activeOnly: true }).then((items) => {
-      setVisitModes(items);
-      const first = items[0];
-      if (first) setVisitForm((current) => ({ ...current, visit_mode_key: current.visit_mode_key || first.key, visit_mode_name_snapshot: current.visit_mode_name_snapshot || first.name }));
-    }).catch(() => setVisitModes([{ key: "in_person", name: "حضوری", active: true }, { key: "online", name: "آنلاین", active: true }]));
-    invoke<NutritionCalculation[]>("list_client_nutrition_calculations", { clientId: client.id }).then((items) => {
-      setNutritionCalculations(items);
-      const latest = items[0];
-      if (latest) setProfileCalcOverrides({ calorieAdjustmentPercent: String(latest.calorie_adjustment_percent || ""), proteinPercent: String(latest.protein_percent), carbsPercent: String(latest.carb_percent), fatPercent: String(latest.fat_percent) });
-      else setProfileCalcOverrides({ calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
-    }).catch(() => setNutritionCalculations([]));
-    invoke<DietPlan[]>("list_client_diet_plans", { clientId: client.id }).then((items) => {
-      setDietPlans(items);
-      setDietPlanDraft(items[0] ?? null);
-    }).catch(() => setDietPlans([]));
-  }, [client]);
+
+    let cancelled = false;
+    setProfileLoading(true);
+    setProfileLoadError("");
+
+    const loadProfile = async () => {
+      try {
+        const [bundle, catalog, modes] = await Promise.all([
+          invoke<ClientProfileBundle>("get_client_profile_bundle", { clientId: client.id }),
+          invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: true }),
+          invoke<VisitModeOption[]>("list_visit_modes", { activeOnly: true }),
+        ]);
+        if (cancelled) return;
+
+        const visitDetails: VisitDetail[] = bundle.visits.map((item) => ({ visit: item.visit, measurements: item.measurements }));
+        setVisits(visitDetails);
+        setAttachments(bundle.attachments);
+        setNutritionCalculations(bundle.nutrition_calculations);
+        setDietPlans(bundle.diet_plans);
+        setDietPlanDraft(bundle.diet_plans[0] ?? null);
+        setCareTracks(bundle.care_tracks);
+        const dietTrack = bundle.care_tracks.find((track) => track.track_type === "diet" && track.status !== "completed") ?? bundle.care_tracks.find((track) => track.track_type === "diet");
+        setTargetWeightDraft(dietTrack?.target_weight ? String(dietTrack.target_weight) : "");
+        setVisitServices(Object.fromEntries(bundle.visits.filter((item) => item.visit.id).map((item) => [item.visit.id!, item.services])));
+        setServiceCatalog(catalog);
+        setVisitModes(modes.length ? modes : [{ key: "in_person", name: "حضوری", active: true }, { key: "online", name: "آنلاین", active: true }]);
+
+        const latestItem = visitDetails[visitDetails.length - 1];
+        setServiceForm((current) => {
+          const preferred = catalog.find((item) => (item.group_key ?? "other") === current.groupKey) ?? catalog[0];
+          return {
+            ...current,
+            visitId: current.visitId || String(latestItem?.visit.id ?? ""),
+            groupKey: (preferred?.group_key ?? current.groupKey) as ServiceGroup,
+            catalogId: preferred?.id ? String(preferred.id) : "",
+            price: preferred?.default_price ?? current.price,
+          };
+        });
+
+        setRecords(visitDetails.filter((item) => item.measurements?.weight_kg).map((item) => ({
+          id: item.measurements?.id,
+          client_id: client.id!,
+          record_date: item.visit.visit_date,
+          weight_kg: item.measurements?.weight_kg ?? client.weight_kg,
+          height_cm: item.measurements?.height_cm ?? client.height_cm,
+          notes: item.measurements?.notes || item.visit.clinical_notes,
+          created_at: item.visit.created_at,
+          updated_at: item.visit.updated_at,
+        })));
+
+        const latestCalculation = bundle.nutrition_calculations[0];
+        setProfileCalcOverrides(latestCalculation ? {
+          calorieAdjustmentPercent: String(latestCalculation.calorie_adjustment_percent || ""),
+          proteinPercent: String(latestCalculation.protein_percent),
+          carbsPercent: String(latestCalculation.carb_percent),
+          fatPercent: String(latestCalculation.fat_percent),
+        } : { calorieAdjustmentPercent: "", proteinPercent: "", carbsPercent: "", fatPercent: "" });
+      } catch (error) {
+        if (!cancelled) setProfileLoadError(getErrorMessage(error, "خواندن کامل پرونده انجام نشد."));
+      } finally {
+        if (!cancelled) setProfileLoading(false);
+      }
+    };
+
+    loadProfile();
+    return () => { cancelled = true; };
+  }, [client?.id, profileReloadVersion]);
 
   useEffect(() => {
     if (visitForm.visit_type === "body_analysis") setMeasurementTab("composition");
@@ -1070,6 +1098,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         await invoke<VisitDetail>("save_visit_with_measurements", {
           visit: {
             client_id: saved.id,
+            track_id: visitForm.track_id,
             visit_date: todayIsoDate(),
             visit_time: "",
             status: "completed",
@@ -1118,6 +1147,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       const detail = await invoke<VisitDetail>("save_visit_with_measurements", {
         visit: {
           client_id: client.id,
+          track_id: visitForm.track_id,
           visit_date: coerceDateToIso(visitForm.visit_date),
           visit_time: visitForm.visit_time,
           status: visitForm.status,
@@ -1167,6 +1197,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       resetVisitForm(updatedClient);
       setTopError("");
       setActiveTab("services");
+      setProfileReloadVersion((value) => value + 1);
       toast("ویزیت ثبت شد؛ اکنون می‌توانید یک یا چند خدمت به آن اضافه کنید.");
     } catch (error) {
       const message = getErrorMessage(error, "ثبت ویزیت انجام نشد؛ علت نامشخص است.");
@@ -1310,6 +1341,48 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const latestBodyAnalysisFile = attachments.find((item) => item.category === "body_analysis") ?? null;
   const latestBodyAnalysisVisit = [...visits].reverse().find((item) => item.measurements?.body_fat_percent || item.measurements?.muscle_mass || item.measurements?.visceral_fat) ?? null;
 
+  const ensureCareTrack = async (trackType: CareTrackType): Promise<CareTrack | null> => {
+    if (!client?.id) return null;
+    const existing = careTracks.find((item) => item.track_type === trackType && item.status !== "completed");
+    if (existing) return existing;
+    try {
+      const saved = await invoke<CareTrack>("save_care_track", {
+        item: {
+          client_id: client.id,
+          track_type: trackType,
+          goal: form.goal,
+          title: careTrackLabels[trackType],
+          start_date: todayIsoDate(),
+          status: "active",
+          target_weight: null,
+          notes: "",
+        },
+      });
+      setCareTracks((items) => [...items, saved]);
+      return saved;
+    } catch (error) {
+      toast(getErrorMessage(error, "ساخت مسیر مراقبت انجام نشد."), "error");
+      return null;
+    }
+  };
+
+  const saveDietTargetWeight = async () => {
+    const track = await ensureCareTrack("diet");
+    if (!track) return;
+    const parsed = targetWeightDraft.trim() ? Number(targetWeightDraft) : null;
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 20 || parsed > 400)) {
+      toast("وزن هدف باید بین ۲۰ تا ۴۰۰ کیلوگرم باشد.", "error");
+      return;
+    }
+    try {
+      const saved = await invoke<CareTrack>("save_care_track", { item: { ...track, target_weight: parsed } });
+      setCareTracks((items) => items.map((item) => item.id === saved.id ? saved : item));
+      toast(parsed ? "وزن هدف مسیر رژیم ذخیره شد." : "وزن هدف حذف شد.");
+    } catch (error) {
+      toast(getErrorMessage(error, "ذخیره وزن هدف انجام نشد."), "error");
+    }
+  };
+
   const saveProfileCalculation = async () => {
     if (!client?.id) return;
     if (Math.abs(profileMacroTotal - 100) > 0.2) { toast("جمع درصد ماکروها باید ۱۰۰٪ باشد.", "error"); return; }
@@ -1318,6 +1391,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         id: latestNutritionCalculation?.id,
         client_id: client.id,
         visit_id: latestNutritionCalculation?.visit_id ?? null,
+        track_id: careTracks.find((track) => track.track_type === "diet")?.id ?? null,
         calculated_at: todayIsoDate(),
         gender: form.gender, age: form.age, height_cm: form.height_cm, weight_kg: form.weight_kg,
         activity_level: form.activity_level, goal: form.goal,
@@ -1366,7 +1440,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const saveDietPlan = async (): Promise<DietPlan | null> => {
     if (!client?.id || !effectiveDietPlan) return null;
     try {
-      const saved = await invoke<DietPlan>("save_diet_plan", { plan: { ...effectiveDietPlan, client_id: client.id, meals_json: JSON.stringify(dietMeals) } });
+      const saved = await invoke<DietPlan>("save_diet_plan", { plan: { ...effectiveDietPlan, client_id: client.id, track_id: careTracks.find((track) => track.track_type === "diet")?.id ?? null, meals_json: JSON.stringify(dietMeals) } });
       setDietPlanDraft(saved);
       setDietPlans((items) => [saved, ...items.filter((entry) => entry.id !== saved.id)]);
       toast("برنامه غذایی ذخیره شد.");
@@ -1683,12 +1757,18 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   ) : null;
 
   const tracksPanel = client?.id ? (() => {
-    const allowedVisits = visits.filter((item) => trackVisitTypes[activeTrack].includes((item.visit.visit_type ?? "initial") as VisitType));
-    const allowedServices = Object.values(visitServices).flat().filter((item) => trackServiceGroups[activeTrack].includes((item.service_group_snapshot ?? "other") as ServiceGroup));
-    const allowedFiles = attachments.filter((item) => trackAttachmentCategories[activeTrack].includes(item.category as AttachmentCategory));
-    const startVisit = () => {
+    const selectedTrack = careTracks.find((item) => item.track_type === activeTrack && item.status !== "completed") ?? careTracks.find((item) => item.track_type === activeTrack);
+    const allowedVisits = selectedTrack?.id
+      ? visits.filter((item) => item.visit.track_id === selectedTrack.id)
+      : visits.filter((item) => trackVisitTypes[activeTrack].includes((item.visit.visit_type ?? "initial") as VisitType));
+    const allowedVisitIds = new Set(allowedVisits.map((item) => item.visit.id).filter((id): id is number => typeof id === "number"));
+    const allowedServices = Object.values(visitServices).flat().filter((item) => allowedVisitIds.has(item.visit_id) || trackServiceGroups[activeTrack].includes((item.service_group_snapshot ?? "other") as ServiceGroup));
+    const allowedFiles = attachments.filter((item) => item.track_id === selectedTrack?.id || trackAttachmentCategories[activeTrack].includes(item.category as AttachmentCategory));
+    const startVisit = async () => {
+      const track = await ensureCareTrack(activeTrack);
+      if (!track) return;
       const nextType: Record<CareTrackType, VisitType> = { diet: "diet_followup", body_analysis: "body_analysis", device: "device", consultation: "consultation", combined: "combined" };
-      setVisitForm((current) => ({ ...current, visit_type: nextType[activeTrack], reason: careTrackLabels[activeTrack] }));
+      setVisitForm((current) => ({ ...current, track_id: track.id ?? null, visit_type: nextType[activeTrack], reason: careTrackLabels[activeTrack] }));
       setActiveTab("visits");
     };
     return (
@@ -1704,11 +1784,12 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
             <ResultCard title="خدمات" value={formatNumber(allowedServices.length)} unit="خدمت" text="آیتم‌های مرتبط با همین مسیر" />
             <ResultCard title="فایل‌ها" value={formatNumber(allowedFiles.length)} unit="فایل" text="اسناد و تصاویر مرتبط" />
           </div>
+          {activeTrack === "diet" && <div className="track-target-editor mt-5"><div><strong>وزن هدف مسیر رژیم</strong><p className="helper mt-1">خط هدف در نمودار وزن نمایش داده می‌شود و در خلاصه پرونده قابل پیگیری است.</p></div><div className="track-target-controls"><OptionalNumberField label="وزن هدف" value={targetWeightDraft} onChange={setTargetWeightDraft} suffix="کیلوگرم" /><SecondaryButton icon={Target} onClick={saveDietTargetWeight}>ذخیره هدف</SecondaryButton></div></div>}
           <div className="mt-5 grid gap-4 lg:grid-cols-2">
             <div className="nested-summary-box"><h4>آخرین فعالیت‌ها</h4>{allowedVisits.length ? allowedVisits.slice(-3).reverse().map((item) => <div key={item.visit.id ?? item.visit.visit_date} className="nested-summary-row"><span>{formatPersianDate(item.visit.visit_date)}</span><strong>{visitTypeLabels[(item.visit.visit_type ?? "initial") as VisitType]}</strong></div>) : <p className="helper mt-3">هنوز ویزیتی در این مسیر ثبت نشده است.</p>}</div>
             <div className="nested-summary-box"><h4>فایل‌های مرتبط</h4>{allowedFiles.length ? allowedFiles.slice(0, 3).map((item) => <button type="button" key={item.id ?? item.file_name} onClick={() => openAttachment(item)} className="nested-summary-row w-full"><span>{attachmentCategoryLabels[item.category as AttachmentCategory] ?? "سایر"}</span><strong>{item.title || item.file_name}</strong></button>) : <p className="helper mt-3">فایلی در این مسیر ثبت نشده است.</p>}</div>
           </div>
-          {activeTrack === "body_analysis" && <div className="body-analysis-embed mt-5"><div className="flex items-center justify-between gap-3"><div><h4>آخرین بادی آنالیز</h4><p className="helper mt-1">پرینت یا تصویر دستگاه بدون خروج از پرونده قابل مشاهده است.</p></div>{latestBodyAnalysisFile && <button className="mini-action" onClick={() => openAttachment(latestBodyAnalysisFile)}><Eye size={16} /> باز کردن کامل</button>}</div>{latestBodyAnalysisFile ? (/\.(png|jpe?g|webp|bmp|gif)$/i.test(latestBodyAnalysisFile.file_name) ? <img src={assetUrl(latestBodyAnalysisFile.local_path)} alt={latestBodyAnalysisFile.title || "بادی آنالیز"} /> : /\.pdf$/i.test(latestBodyAnalysisFile.file_name) ? <iframe title="پیش‌نمایش بادی آنالیز" src={assetUrl(latestBodyAnalysisFile.local_path)} /> : <button className="embedded-file-fallback" onClick={() => openAttachment(latestBodyAnalysisFile)}><FileText size={30} /><strong>{latestBodyAnalysisFile.title || latestBodyAnalysisFile.file_name}</strong><span>برای مشاهده فایل کلیک کنید</span></button>) : <div className="mini-empty">هنوز فایل بادی آنالیز بارگذاری نشده است. از تب فایل‌ها دسته «بادی آنالیز» را انتخاب کنید.</div>}</div>}
+          {activeTrack === "body_analysis" && <div className="body-analysis-embed mt-5"><div className="flex items-center justify-between gap-3"><div><h4>آخرین بادی آنالیز</h4><p className="helper mt-1">تصویر یا PDF دستگاه داخل پرونده و بدون خروج از اپ دیده می‌شود.</p></div></div><BodyAnalysisViewer attachment={latestBodyAnalysisFile} onOpen={() => latestBodyAnalysisFile && openAttachment(latestBodyAnalysisFile)} /></div>}
 
         </div>
       </div>
@@ -1726,7 +1807,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     ].filter((row) => row.value !== undefined && row.value !== null);
     return (
       <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
-        <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter"><h2 className="text-lg font-bold">روند وزن</h2><p className="helper mt-2">روند زمانی وزن از ویزیت‌های ثبت‌شده ساخته می‌شود.</p><div className="mt-5">{records.length === 0 ? <EmptyState icon={ClipboardList} title="اندازه‌گیری ثبت نشده" text="اولین ویزیت را ثبت کنید تا روندها ساخته شوند." /> : <WeightHistory records={records} />}</div></div>
+        <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter"><h2 className="text-lg font-bold">روند پیشرفت</h2><p className="helper mt-2">وزن، سایزها و ترکیب بدن را بین ویزیت‌ها مقایسه کنید.</p><div className="mt-5"><ClientTrendChart visits={visits} targetWeight={careTracks.find((track) => track.track_type === "diet")?.target_weight} /></div></div>
         <div className="rounded-card border border-warm-100 bg-warm-50 p-5 motion-enter motion-delay-1"><div className="flex items-center justify-between"><div><h2 className="text-lg font-bold">آخرین اندازه‌گیری کامل</h2><p className="helper mt-2">مقادیر عمومی، ترکیب بدن و اندام‌های چپ/راست.</p></div><Activity className="text-sage" size={24} /></div>{displayRows.length ? <div className="measurement-overview mt-5">{displayRows.map((row) => <div key={row.label}><span>{row.label}</span><strong className="numbers">{formatNumber(row.value!, 1)} <small>{row.suffix}</small></strong></div>)}</div> : <div className="mt-5"><EmptyState icon={Ruler} title="داده تکمیلی ثبت نشده" text="در تب ویزیت‌ها، زیربخش اندازه‌گیری عمومی، ترکیب بدن یا اندام و موضعی را تکمیل کنید." /></div>}</div>
       </div>
     );
@@ -1778,15 +1859,17 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const profileCompletion = Math.round(profileCompletionItems.filter(Boolean).length / profileCompletionItems.length * 100);
   const allServices = Object.values(visitServices).flat();
   const latestServices = allServices.slice(-4).reverse();
-  const activeTrackSet = new Set<CareTrackType>();
-  visits.forEach((item) => {
-    const type = (item.visit.visit_type ?? "initial") as VisitType;
-    if (["initial", "diet_followup"].includes(type)) activeTrackSet.add("diet");
-    if (type === "body_analysis") activeTrackSet.add("body_analysis");
-    if (type === "device") activeTrackSet.add("device");
-    if (type === "consultation") activeTrackSet.add("consultation");
-    if (type === "combined") activeTrackSet.add("combined");
-  });
+  const activeTrackSet = new Set<CareTrackType>(careTracks.filter((track) => track.status === "active").map((track) => track.track_type));
+  if (activeTrackSet.size === 0) {
+    visits.forEach((item) => {
+      const type = (item.visit.visit_type ?? "initial") as VisitType;
+      if (["initial", "diet_followup"].includes(type)) activeTrackSet.add("diet");
+      if (type === "body_analysis") activeTrackSet.add("body_analysis");
+      if (type === "device") activeTrackSet.add("device");
+      if (type === "consultation") activeTrackSet.add("consultation");
+      if (type === "combined") activeTrackSet.add("combined");
+    });
+  }
   const summaryPanel = client?.id ? (
     <div className="grid gap-5">
       <section className="profile-hero-summary">
@@ -1804,6 +1887,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         <ResultCard title="تغییر از ویزیت قبل" value={weightDelta === null ? "—" : formatNumber(weightDelta, 1)} unit="کیلوگرم" text={weightDelta === null ? "حداقل دو اندازه‌گیری لازم است" : weightDelta < 0 ? "کاهش ثبت شده" : "افزایش ثبت شده"} />
         <ResultCard title="BMI" value={latestBmi ? formatNumber(latestBmi, 1) : formatNumber(baseProfileCalculation.bmi, 1)} unit={bmiCategory(latestBmi ?? baseProfileCalculation.bmi)} text="بر اساس آخرین وزن و قد" featured />
         <ResultCard title="ویزیت‌های پرونده" value={formatNumber(visits.length)} unit="جلسه" text={latestVisit ? `آخرین: ${formatPersianDate(latestVisit.visit.visit_date)}` : "هنوز ویزیتی ثبت نشده"} />
+      </section>
+      <section className="grid gap-5 xl:grid-cols-[1.35fr_0.65fr]">
+        <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter"><div className="flex items-center justify-between gap-3"><div><h3 className="font-bold">روند تغییرات مراجع</h3><p className="helper mt-1">شاخص موردنظر را انتخاب کنید؛ نمودار از ویزیت‌ها به‌صورت خودکار ساخته می‌شود.</p></div><TrendingUp className="text-sage" /></div><div className="mt-5"><ClientTrendChart visits={visits} targetWeight={careTracks.find((track) => track.track_type === "diet")?.target_weight} /></div></div>
+        <div className="rounded-card border border-warm-100 bg-warm-50 p-5 motion-enter motion-delay-1"><div className="flex items-center justify-between"><div><h3 className="font-bold">آخرین بادی آنالیز</h3><p className="helper mt-1">نمایش سریع آخرین فایل و شاخص‌ها.</p></div><Activity className="text-sage" /></div><div className="mt-4"><BodyAnalysisViewer attachment={latestBodyAnalysisFile} onOpen={() => latestBodyAnalysisFile && openAttachment(latestBodyAnalysisFile)} /></div>{latestBodyAnalysisVisit?.measurements && <div className="body-summary-metrics mt-4"><div><span>چربی بدن</span><strong>{latestBodyAnalysisVisit.measurements.body_fat_percent ? `${formatNumber(latestBodyAnalysisVisit.measurements.body_fat_percent, 1)}٪` : "—"}</strong></div><div><span>توده عضله</span><strong>{latestBodyAnalysisVisit.measurements.muscle_mass ? `${formatNumber(latestBodyAnalysisVisit.measurements.muscle_mass, 1)} kg` : "—"}</strong></div><div><span>چربی احشایی</span><strong>{latestBodyAnalysisVisit.measurements.visceral_fat ? formatNumber(latestBodyAnalysisVisit.measurements.visceral_fat, 1) : "—"}</strong></div></div>}</div>
       </section>
       <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="rounded-card border border-warm-100 bg-white p-5"><div className="flex items-center justify-between"><div><h3 className="font-bold">تصویر کامل وضعیت فعلی</h3><p className="helper mt-1">شاخص‌های اصلی برای تصمیم‌گیری سریع متخصص.</p></div><Target className="text-sage" /></div><div className="measurement-overview mt-5"><div><span>هدف اصلی</span><strong>{goalLabels[form.goal]}</strong></div><div><span>سطح فعالیت</span><strong>{activityLabels[form.activity_level]}</strong></div><div><span>کالری هدف</span><strong>{latestNutritionCalculation ? `${formatNumber(latestNutritionCalculation.target_calories)} kcal` : "—"}</strong></div><div><span>برنامه غذایی</span><strong>{dietPlans[0]?.title || "ثبت نشده"}</strong></div><div><span>فایل‌ها</span><strong>{formatNumber(attachments.length)} فایل</strong></div><div><span>خدمات</span><strong>{formatNumber(allServices.length)} مورد</strong></div></div></div>
@@ -1827,6 +1914,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       />
       <section className="card p-6">
         {topError && <ErrorSummary message={topError} />}
+        {profileLoadError && <div className="mb-5"><ErrorSummary message={profileLoadError} /><button type="button" className="mini-action mt-3" onClick={() => setProfileReloadVersion((value) => value + 1)}><RotateCcw size={16} /> تلاش دوباره</button></div>}
+        {profileLoading && client?.id && <div className="mb-5"><SkeletonRows /></div>}
         {client?.id && (
           <div className="mb-6 flex flex-wrap gap-2 border-b border-warm-100 pb-4">
             <TabButton active={activeTab === "summary"} onClick={() => setActiveTab("summary")}>خلاصه</TabButton>
@@ -1887,7 +1976,12 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
 
   useEffect(() => {
     if (!selected?.id || !isDesktopRuntime()) { setSavedCalculation(null); return; }
-    invoke<NutritionCalculation[]>("list_client_nutrition_calculations", { clientId: selected.id }).then(hydrateSaved).catch(() => setSavedCalculation(null));
+    invoke<NutritionCalculation[]>("list_client_nutrition_calculations", { clientId: selected.id })
+      .then(hydrateSaved)
+      .catch((error) => {
+        setSavedCalculation(null);
+        toast(getErrorMessage(error, "بازیابی محاسبات قبلی انجام نشد."), "error");
+      });
   }, [selected?.id]);
 
   useEffect(() => {
@@ -2041,9 +2135,30 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
       toast("اطلاعات ورود تغییر کرد.");
     } catch (error) { toast(getErrorMessage(error, "رمز فعلی درست نیست یا تغییر انجام نشد."), "error"); }
   };
-  const exportData = async () => { try { toast(`فایل پشتیبان ساخته شد: ${await invoke<string>("export_data_backup")}`); } catch (error) { toast(getErrorMessage(error, "ساخت فایل پشتیبان انجام نشد."), "error"); } };
-  const restoreData = async () => { try { const selected = await open({ multiple: false, filters: [{ name: "Dietoy backup", extensions: ["json"] }] }); if (!selected || Array.isArray(selected)) return; await invoke("restore_data_backup", { path: selected }); const restored = await invoke<Settings>("get_settings"); setSettings(restored); toast("اطلاعات قبلی بازیابی شد."); } catch (error) { toast(getErrorMessage(error, "بازیابی انجام نشد."), "error"); } };
-  const exportSqlite = async () => { try { toast(`کپی کامل پایگاه داده ساخته شد: ${await invoke<string>("export_database")}`); } catch (error) { toast(getErrorMessage(error, "خروجی SQLite انجام نشد."), "error"); } };
+  const exportCompleteBackup = async () => {
+    try {
+      const path = await invoke<string>("export_complete_backup");
+      toast(`پشتیبان کامل ساخته شد: ${path}`);
+    } catch (error) {
+      toast(getErrorMessage(error, "ساخت پشتیبان کامل انجام نشد."), "error");
+    }
+  };
+  const restoreCompleteBackup = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "پوشه پشتیبان کامل Dietory را انتخاب کنید" });
+      if (!selected || Array.isArray(selected)) return;
+      const safetyPath = await invoke<string>("restore_complete_backup", { path: selected });
+      const restored = await invoke<Settings>("get_settings");
+      setSettings(restored);
+      setForm(restored);
+      toast(`بازیابی کامل شد. یک پشتیبان ایمنی هم ساخته شد: ${safetyPath}`);
+    } catch (error) {
+      toast(getErrorMessage(error, "بازیابی کامل انجام نشد."), "error");
+    }
+  };
+  const exportData = async () => { try { toast(`فایل پشتیبان سبک ساخته شد: ${await invoke<string>("export_data_backup")}`); } catch (error) { toast(getErrorMessage(error, "ساخت فایل پشتیبان سبک انجام نشد."), "error"); } };
+  const restoreData = async () => { try { const selected = await open({ multiple: false, filters: [{ name: "Dietory backup", extensions: ["json"] }] }); if (!selected || Array.isArray(selected)) return; await invoke("restore_data_backup", { path: selected }); const restored = await invoke<Settings>("get_settings"); setSettings(restored); setForm(restored); toast("پشتیبان سبک بازیابی شد."); } catch (error) { toast(getErrorMessage(error, "بازیابی پشتیبان سبک انجام نشد."), "error"); } };
+  const exportSqlite = async () => { try { toast(`کپی SQLite ساخته شد: ${await invoke<string>("export_database")}`); } catch (error) { toast(getErrorMessage(error, "خروجی SQLite انجام نشد."), "error"); } };
 
   const resetServiceEditor = (group: ServiceGroup = (serviceEditor.group_key ?? "diet") as ServiceGroup) => setServiceEditor({ ...emptyServiceEditor, group_key: group });
   const saveServiceDefinition = async () => {
@@ -2085,7 +2200,11 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
 
         <section className="card p-6"><div className="flex items-center gap-2"><Video className="text-sage" /><h2 className="text-xl font-bold">شیوه‌های ویزیت</h2></div><p className="helper mt-2">حضوری و آنلاین پیش‌فرض هستند؛ عنوان‌های دیگر مثل تلفنی یا منزل را هم اضافه کنید.</p><div className="settings-service-grid mt-5"><div className="service-editor-card"><div className="grid gap-3"><TextField label="نام شیوه" value={visitModeEditor.name} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, name: value })} placeholder="مثلاً تلفنی" /><TextField label="توضیح" value={visitModeEditor.description ?? ""} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, description: value })} /></div><div className="mt-4 flex gap-2"><PrimaryButton icon={Plus} onClick={saveVisitModeDefinition}>{visitModeEditor.id ? "ذخیره" : "افزودن"}</PrimaryButton>{visitModeEditor.id && <SecondaryButton onClick={() => setVisitModeEditor({ ...emptyVisitModeEditor })}>انصراف</SecondaryButton>}</div></div><div className="grid gap-2">{visitModes.map((item) => <div key={item.id ?? item.key} className={cn("service-settings-row", !item.active && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{item.description || visitModeDefaultLabels[item.key] || "شیوه مراجعه"}</small></div><div className="flex gap-2"><button className="mini-action" onClick={() => setVisitModeEditor(item)}><Pencil size={15} /> ویرایش</button><button className="mini-action" onClick={() => toggleVisitMode(item)}>{item.active ? "غیرفعال" : "فعال"}</button></div></div>)}</div></div></section>
 
-        <section className="card p-6"><div className="flex items-center gap-2"><Database className="text-sage" /><h2 className="text-xl font-bold">پشتیبان‌گیری امن</h2></div><p className="helper mt-2">قبل از هر آپدیت یک خروجی سبک و یک کپی کامل SQLite بگیرید.</p><div className="mt-5 flex flex-wrap gap-3"><SecondaryButton icon={Download} onClick={exportData}>خروجی سبک</SecondaryButton><SecondaryButton icon={Database} onClick={exportSqlite}>کپی کامل SQLite</SecondaryButton><SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی</SecondaryButton></div></section>
+        <section className="card p-6 motion-enter">
+          <div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Database className="text-sage" /><h2 className="text-xl font-bold">پشتیبان‌گیری امن</h2></div><p className="helper mt-2">پشتیبان کامل، دیتابیس و تمام فایل‌های مراجعین را باهم نگه می‌دارد و گزینه پیشنهادی قبل از هر آپدیت است.</p></div><span className="pill-soft">پیشنهادی</span></div>
+          <div className="mt-5 grid gap-3 md:grid-cols-2"><button type="button" className="backup-action backup-action-primary" onClick={exportCompleteBackup}><Download size={22} /><span><strong>ساخت پشتیبان کامل</strong><small>دیتابیس، پرونده‌ها، تصاویر، PDFها و دارایی‌های برند</small></span></button><button type="button" className="backup-action" onClick={restoreCompleteBackup}><FileUp size={22} /><span><strong>بازیابی پشتیبان کامل</strong><small>انتخاب پوشه‌ای که فایل manifest.json دارد</small></span></button></div>
+          <details className="advanced-backup mt-4"><summary>گزینه‌های فنی و سبک</summary><div className="mt-4 flex flex-wrap gap-3"><SecondaryButton icon={Download} onClick={exportData}>خروجی JSON سبک</SecondaryButton><SecondaryButton icon={Database} onClick={exportSqlite}>فقط SQLite</SecondaryButton><SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی JSON قدیمی</SecondaryButton></div></details>
+        </section>
       </div>}
 
       {mode === "advanced" && <div className="grid gap-5">

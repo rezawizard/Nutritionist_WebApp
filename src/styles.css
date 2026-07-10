@@ -804,3 +804,153 @@ select {
   .completion-orb { width: 92px; height: 92px; }
   .body-analysis-embed img, .body-analysis-embed iframe { min-height: 300px; }
 }
+
+/* Dietory v5 — progress intelligence and embedded clinical media */
+.body-viewer-shell {
+  overflow: hidden;
+  border: 1px solid rgba(49,166,157,.18);
+  border-radius: 22px;
+  background: linear-gradient(180deg,#fff,#f5fbf9);
+  box-shadow: 0 18px 50px rgba(15,80,121,.08);
+}
+.body-viewer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(49,166,157,.14);
+  background: rgba(255,255,255,.9);
+}
+.body-viewer-toolbar strong,.body-viewer-toolbar small { display:block; }
+.body-viewer-toolbar strong { color:#153a48; font-size:13px; }
+.body-viewer-toolbar small { margin-top:4px; color:#7a8b85; font-size:10px; }
+.body-viewer-actions { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+.body-viewer-actions button {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  min-height:34px; padding:7px 10px; border:1px solid rgba(49,166,157,.18);
+  border-radius:11px; background:#fff; color:#0f5079; font-size:11px; font-weight:800;
+  transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.body-viewer-actions button:hover { transform:translateY(-1px); border-color:#31a69d; box-shadow:0 8px 22px rgba(49,166,157,.14); }
+.body-viewer-actions span { min-width:42px; text-align:center; color:#52706b; font-size:11px; font-weight:800; }
+.body-viewer-stage { position:relative; min-height:340px; max-height:590px; overflow:auto; display:grid; place-items:center; background:radial-gradient(circle at top right,rgba(138,227,195,.16),transparent 36%),#eef6f4; }
+.body-viewer-stage img { display:block; max-width:96%; max-height:560px; margin:auto; transform-origin:center; transition:transform .25s cubic-bezier(.2,.8,.2,1); box-shadow:0 18px 55px rgba(15,80,121,.16); border-radius:14px; }
+.body-viewer-stage object { width:100%; min-height:560px; border:0; background:#fff; }
+.body-viewer-loading,.body-viewer-error,.body-viewer-empty { display:grid; place-items:center; gap:10px; min-height:220px; padding:28px; text-align:center; color:#61756f; }
+.body-viewer-loading svg { color:#31a69d; }
+.body-viewer-error strong,.body-viewer-empty strong { color:#17485c; }
+.body-viewer-error span,.body-viewer-empty span { max-width:420px; font-size:12px; line-height:2; }
+.body-viewer-error button { border:0; border-radius:12px; background:#0f5079; color:white; padding:9px 14px; font-weight:800; }
+
+.client-trend-card { min-width:0; }
+.trend-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.trend-metric-pills,.trend-range { display:flex; gap:7px; flex-wrap:wrap; align-items:center; }
+.trend-metric-pills > button,.trend-range button,.trend-more summary,.trend-more div button {
+  border:1px solid rgba(49,166,157,.16); background:#fff; color:#59726c; border-radius:999px;
+  padding:7px 11px; font-size:10px; font-weight:800; transition:all .18s ease;
+}
+.trend-metric-pills > button:hover,.trend-range button:hover,.trend-more div button:hover { transform:translateY(-1px); border-color:#31a69d; color:#0f5079; }
+.trend-metric-pills > button.active,.trend-range button.active,.trend-more div button.active { color:#fff; border-color:#31a69d; background:linear-gradient(135deg,#31a69d,#0f5079); box-shadow:0 8px 20px rgba(49,166,157,.2); }
+.trend-more { position:relative; }
+.trend-more summary { list-style:none; display:flex; align-items:center; gap:5px; cursor:pointer; }
+.trend-more summary::-webkit-details-marker { display:none; }
+.trend-more > div { position:absolute; z-index:20; top:calc(100% + 8px); right:0; width:240px; padding:10px; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; border:1px solid rgba(49,166,157,.18); border-radius:16px; background:#fff; box-shadow:0 22px 60px rgba(15,80,121,.16); animation:popoverIn .18s ease both; }
+.trend-kpis { margin-top:16px; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.trend-kpis > div { border:1px solid rgba(49,166,157,.12); border-radius:16px; background:linear-gradient(180deg,#fff,#f7fbfa); padding:12px 14px; }
+.trend-kpis span,.trend-kpis strong { display:block; }
+.trend-kpis span { color:#80918c; font-size:10px; }
+.trend-kpis strong { margin-top:5px; color:#163d4a; font-size:15px; }
+.trend-kpis strong small { font-size:9px; color:#79908a; }
+.trend-kpis .positive strong { color:#19866f; }
+.trend-kpis .attention strong { color:#b66b22; }
+.trend-svg-wrap { margin-top:15px; min-height:250px; overflow:hidden; border-radius:18px; background:linear-gradient(180deg,rgba(138,227,195,.07),rgba(255,255,255,.8)); }
+.trend-svg-wrap svg { width:100%; height:auto; min-height:250px; overflow:visible; }
+.trend-grid-line { stroke:#dce9e5; stroke-width:1; stroke-dasharray:4 7; }
+.trend-axis-label,.trend-date-label { fill:#879a94; font-size:9px; font-family:Vazirmatn,sans-serif; }
+.trend-date-label { font-size:8px; }
+.trend-target-line { stroke:#f0a85f; stroke-width:2; stroke-dasharray:8 7; }
+.trend-target-label { fill:#b76c22; font-size:9px; font-weight:800; }
+.trend-line-shadow { fill:none; stroke:rgba(49,166,157,.14); stroke-width:12; stroke-linecap:round; stroke-linejoin:round; }
+.trend-line-path { fill:none; stroke:url(#trendGradient); stroke:#31a69d; stroke-width:4; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:1600; stroke-dashoffset:1600; animation:drawTrend 1.05s cubic-bezier(.2,.8,.2,1) forwards; }
+.trend-point { fill:#fff; stroke:#0f5079; stroke-width:3; transition:r .16s ease,fill .16s ease; }
+.trend-hit { fill:transparent; cursor:pointer; }
+.trend-hit:hover + * { opacity:1; }
+.trend-tooltip rect { fill:#0f5079; filter:drop-shadow(0 8px 18px rgba(15,80,121,.24)); }
+.trend-tooltip text { fill:#fff; font-size:10px; font-family:Vazirmatn,sans-serif; font-weight:700; }
+.trend-empty { min-height:230px; display:grid; place-items:center; align-content:center; gap:9px; border:1px dashed rgba(49,166,157,.25); border-radius:18px; background:#f7fbfa; text-align:center; color:#7d908a; padding:22px; }
+.trend-empty svg { color:#31a69d; }
+.trend-empty strong { color:#17485c; }
+.trend-empty span { max-width:420px; font-size:11px; line-height:2; }
+.body-summary-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+.body-summary-metrics > div { border:1px solid rgba(49,166,157,.13); border-radius:14px; background:#fff; padding:10px; }
+.body-summary-metrics span,.body-summary-metrics strong { display:block; }
+.body-summary-metrics span { color:#879892; font-size:9px; }
+.body-summary-metrics strong { margin-top:5px; color:#16485b; font-size:12px; }
+
+@keyframes drawTrend { to { stroke-dashoffset:0; } }
+@keyframes popoverIn { from { opacity:0; transform:translateY(-5px) scale(.98); } to { opacity:1; transform:none; } }
+
+.card,.rounded-card,.summary-command-grid > button,.client-row,.service-item-select,.care-track-tab {
+  will-change:transform;
+}
+.card:hover,.rounded-card:hover { transition:box-shadow .22s ease,border-color .22s ease; }
+.profile-hero-summary { animation:heroReveal .55s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes heroReveal { from { opacity:0; transform:translateY(8px) scale(.992); } to { opacity:1; transform:none; } }
+
+@media (max-width: 900px) {
+  .body-viewer-toolbar { align-items:flex-start; flex-direction:column; }
+  .body-viewer-stage object { min-height:430px; }
+  .trend-kpis { grid-template-columns:1fr; }
+  .trend-date-label { display:none; }
+  .body-summary-metrics { grid-template-columns:1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trend-line-path,.profile-hero-summary,.trend-more > div { animation:none !important; stroke-dashoffset:0; }
+  .body-viewer-stage img,.body-viewer-actions button,.trend-metric-pills button,.trend-range button { transition:none !important; }
+}
+
+/* Dietory v5 secure backup */
+.backup-action {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  width: 100%;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(15, 80, 121, 0.14);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(255,255,255,.98), rgba(237,249,246,.86));
+  text-align: right;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+.backup-action:hover { transform: translateY(-2px); border-color: rgba(49,166,157,.42); box-shadow: 0 14px 32px rgba(15,80,121,.10); }
+.backup-action-primary { background: linear-gradient(135deg, rgba(15,80,121,.98), rgba(49,166,157,.94)); color: #fff; border-color: transparent; }
+.backup-action span { display: grid; gap: .25rem; }
+.backup-action strong { font-size: .98rem; }
+.backup-action small { font-size: .78rem; opacity: .76; line-height: 1.7; }
+.advanced-backup { border-top: 1px dashed rgba(15,80,121,.16); padding-top: 1rem; }
+.advanced-backup summary { cursor: pointer; color: var(--muted, #667085); font-size: .86rem; font-weight: 700; }
+
+/* Dietory v5 PDF.js body analysis viewer */
+.body-viewer-title { min-width: 0; display: grid; gap: .2rem; }
+.body-viewer-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.body-viewer-pagination { display: inline-flex; align-items: center; gap: .35rem; padding-inline: .35rem; border-radius: 12px; background: rgba(15,80,121,.07); }
+.body-viewer-pagination button:disabled { opacity: .35; cursor: not-allowed; }
+.body-viewer-stage { position: relative; min-height: 320px; overflow: hidden; }
+.body-image-scroll, .body-pdf-scroll { width: 100%; height: 100%; min-height: 320px; overflow: auto; display: grid; place-items: start center; padding: 1.25rem; background: radial-gradient(circle at 50% 0, rgba(138,227,195,.13), transparent 48%), #eef3f4; }
+.body-image-scroll img { max-width: 100%; height: auto; transform-origin: top center; transition: transform 180ms ease; box-shadow: 0 14px 38px rgba(15,80,121,.14); border-radius: 10px; }
+.body-pdf-scroll canvas { max-width: none; background: #fff; box-shadow: 0 18px 48px rgba(15,80,121,.16); border-radius: 6px; animation: viewer-page-in 220ms ease both; }
+.body-viewer-loading { position: absolute; z-index: 4; inset: 0; display: grid; place-content: center; justify-items: center; gap: .65rem; background: rgba(246,250,249,.82); backdrop-filter: blur(4px); color: #0f5079; }
+.body-viewer-fullscreen { position: fixed; z-index: 90; inset: 18px; display: flex; flex-direction: column; box-shadow: 0 24px 80px rgba(5,35,53,.28); background: #fff; }
+.body-viewer-fullscreen .body-viewer-stage, .body-viewer-fullscreen .body-image-scroll, .body-viewer-fullscreen .body-pdf-scroll { flex: 1; min-height: 0; height: 100%; }
+@keyframes viewer-page-in { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+
+.track-target-editor { display: flex; align-items: end; justify-content: space-between; gap: 1rem; padding: 1rem; border-radius: 18px; border: 1px solid rgba(49,166,157,.22); background: linear-gradient(135deg, rgba(138,227,195,.13), rgba(255,255,255,.92)); }
+.track-target-controls { display: flex; align-items: end; gap: .75rem; min-width: min(100%, 340px); }
+.track-target-controls > div:first-child { flex: 1; }
+@media (max-width: 760px) { .track-target-editor, .track-target-controls { align-items: stretch; flex-direction: column; } }
+.trend-total-change { display: block; margin-top: .2rem; color: #7a8892; font-size: .7rem; font-weight: 600; }
+.trend-more-trigger { display: inline-flex; align-items: center; gap: .3rem; }
+.trend-more-open .trend-more-trigger svg { transform: rotate(180deg); }
+.trend-more-trigger svg { transition: transform 160ms ease; }

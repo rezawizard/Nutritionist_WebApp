@@ -152,6 +152,7 @@ export interface NutritionCalculation {
   id?: number;
   client_id: number;
   visit_id?: number | null;
+  track_id?: number | null;
   calculated_at: string;
   gender: Gender;
   age: number;
@@ -200,6 +201,7 @@ export interface DietPlan {
   id?: number;
   client_id: number;
   visit_id?: number | null;
+  track_id?: number | null;
   calculation_id?: number | null;
   title: string;
   plan_date: string;
@@ -242,6 +244,39 @@ export interface ServiceCatalogItem {
   body_area_required: boolean;
   active: boolean;
   description?: string;
+}
+
+export interface MeasurementValue {
+  id?: number;
+  visit_id: number;
+  metric_key: string;
+  side: "left" | "right" | "center" | string;
+  value: number;
+  unit: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface VisitBundle {
+  visit: Visit;
+  measurements?: VisitMeasurements | null;
+  services: VisitService[];
+  measurement_values: MeasurementValue[];
+}
+
+export interface ClientProfileBundle {
+  client: Client;
+  care_tracks: CareTrack[];
+  visits: VisitBundle[];
+  attachments: Attachment[];
+  nutrition_calculations: NutritionCalculation[];
+  diet_plans: DietPlan[];
+}
+
+export interface AttachmentPreview {
+  mime_type: string;
+  base64_data: string;
+  file_name: string;
 }
 
 export interface Settings {
