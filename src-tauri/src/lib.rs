@@ -2,8 +2,10 @@ use chrono::{Duration, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration as StdDuration;
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -51,6 +53,8 @@ struct ClientRecord {
 struct Visit {
     id: Option<i64>,
     client_id: i64,
+    #[serde(default)]
+    track_id: Option<i64>,
     #[serde(default = "default_visit_type")]
     visit_type: String,
     #[serde(default = "default_visit_mode_key")]
@@ -161,6 +165,12 @@ struct Attachment {
     #[serde(default)]
     visit_id: Option<i64>,
     #[serde(default)]
+    track_id: Option<i64>,
+    #[serde(default)]
+    related_type: String,
+    #[serde(default)]
+    related_id: Option<i64>,
+    #[serde(default)]
     category: String,
     #[serde(default)]
     title: String,
@@ -210,6 +220,8 @@ struct NutritionCalculation {
     client_id: i64,
     #[serde(default)]
     visit_id: Option<i64>,
+    #[serde(default)]
+    track_id: Option<i64>,
     calculated_at: String,
     gender: String,
     age: i64,
@@ -244,6 +256,8 @@ struct DietPlan {
     #[serde(default)]
     visit_id: Option<i64>,
     #[serde(default)]
+    track_id: Option<i64>,
+    #[serde(default)]
     calculation_id: Option<i64>,
     title: String,
     plan_date: String,
@@ -264,6 +278,60 @@ struct DietPlan {
     notes: String,
     created_at: Option<String>,
     updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CareTrack {
+    id: Option<i64>,
+    client_id: i64,
+    track_type: String,
+    goal: String,
+    title: String,
+    start_date: String,
+    status: String,
+    #[serde(default)]
+    target_weight: Option<f64>,
+    #[serde(default)]
+    notes: String,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct MeasurementValue {
+    id: Option<i64>,
+    visit_id: i64,
+    metric_key: String,
+    side: String,
+    value: f64,
+    unit: String,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct VisitBundle {
+    visit: Visit,
+    measurements: Option<VisitMeasurements>,
+    services: Vec<VisitService>,
+    measurement_values: Vec<MeasurementValue>,
+}
+
+#[derive(Debug, Serialize)]
+struct ClientProfileBundle {
+    client: Client,
+    care_tracks: Vec<CareTrack>,
+    visits: Vec<VisitBundle>,
+    attachments: Vec<Attachment>,
+    nutrition_calculations: Vec<NutritionCalculation>,
+    diet_plans: Vec<DietPlan>,
+}
+
+#[derive(Debug, Serialize)]
+struct AttachmentPreview {
+    mime_type: String,
+    base64_data: String,
+    file_name: String,
 }
 
 fn default_active_service() -> bool {
@@ -543,6 +611,8 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, definition: &str)
 }
 
 fn init_db(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
+        .map_err(|err| err.to_string())?;
     conn.execute_batch(
         "
         CREATE TABLE IF NOT EXISTS clients (
@@ -577,9 +647,25 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS care_tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            track_type TEXT NOT NULL,
+            goal TEXT NOT NULL DEFAULT 'maintain',
+            title TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            target_weight REAL,
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS visits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL,
+            track_id INTEGER,
             visit_date TEXT NOT NULL,
             visit_time TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'completed',
@@ -594,7 +680,8 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             legacy_record_id INTEGER UNIQUE,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+            FOREIGN KEY(track_id) REFERENCES care_tracks(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS visit_measurements (
@@ -621,6 +708,19 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS measurement_values (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            visit_id INTEGER NOT NULL,
+            metric_key TEXT NOT NULL,
+            side TEXT NOT NULL DEFAULT 'center',
+            value REAL NOT NULL,
+            unit TEXT NOT NULL DEFAULT 'cm',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(visit_id, metric_key, side),
+            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS visit_services (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             visit_id INTEGER NOT NULL,
@@ -641,6 +741,9 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL,
             visit_id INTEGER,
+            track_id INTEGER,
+            related_type TEXT NOT NULL DEFAULT '',
+            related_id INTEGER,
             category TEXT NOT NULL DEFAULT 'other',
             title TEXT NOT NULL DEFAULT '',
             file_name TEXT NOT NULL DEFAULT '',
@@ -649,7 +752,8 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             notes TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
-            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL
+            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL,
+            FOREIGN KEY(track_id) REFERENCES care_tracks(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS service_catalog (
@@ -676,6 +780,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL,
             visit_id INTEGER,
+            track_id INTEGER,
             calculated_at TEXT NOT NULL,
             gender TEXT NOT NULL,
             age INTEGER NOT NULL,
@@ -700,13 +805,15 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
-            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL
+            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL,
+            FOREIGN KEY(track_id) REFERENCES care_tracks(id) ON DELETE SET NULL
         );
 
         CREATE TABLE IF NOT EXISTS diet_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL,
             visit_id INTEGER,
+            track_id INTEGER,
             calculation_id INTEGER,
             title TEXT NOT NULL,
             plan_date TEXT NOT NULL,
@@ -724,8 +831,21 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             updated_at TEXT NOT NULL,
             FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
             FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL,
+            FOREIGN KEY(track_id) REFERENCES care_tracks(id) ON DELETE SET NULL,
             FOREIGN KEY(calculation_id) REFERENCES nutrition_calculations(id) ON DELETE SET NULL
         );
+
+        CREATE INDEX IF NOT EXISTS idx_visits_client_date ON visits(client_id, visit_date, id);
+        CREATE INDEX IF NOT EXISTS idx_visits_track ON visits(track_id, visit_date);
+        CREATE INDEX IF NOT EXISTS idx_services_visit ON visit_services(visit_id);
+        CREATE INDEX IF NOT EXISTS idx_measurements_visit ON visit_measurements(visit_id);
+        CREATE INDEX IF NOT EXISTS idx_measurement_values_visit ON measurement_values(visit_id, metric_key);
+        CREATE INDEX IF NOT EXISTS idx_attachments_client ON attachments(client_id, attachment_date);
+        CREATE INDEX IF NOT EXISTS idx_attachments_visit ON attachments(visit_id);
+        CREATE INDEX IF NOT EXISTS idx_attachments_track ON attachments(track_id);
+        CREATE INDEX IF NOT EXISTS idx_nutrition_client_date ON nutrition_calculations(client_id, calculated_at);
+        CREATE INDEX IF NOT EXISTS idx_diet_plans_client_date ON diet_plans(client_id, plan_date);
+        CREATE INDEX IF NOT EXISTS idx_care_tracks_client ON care_tracks(client_id, status, track_type);
         ",
     )
     .map_err(|err| err.to_string())?;
@@ -733,9 +853,15 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "service_catalog", "group_key", "group_key TEXT NOT NULL DEFAULT 'other'")?;
     ensure_column(conn, "service_catalog", "description", "description TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "visit_services", "service_group_snapshot", "service_group_snapshot TEXT NOT NULL DEFAULT 'other'")?;
+    ensure_column(conn, "visits", "track_id", "track_id INTEGER")?;
     ensure_column(conn, "visits", "visit_type", "visit_type TEXT NOT NULL DEFAULT 'initial'")?;
     ensure_column(conn, "visits", "visit_mode_key", "visit_mode_key TEXT NOT NULL DEFAULT 'in_person'")?;
     ensure_column(conn, "visits", "visit_mode_name_snapshot", "visit_mode_name_snapshot TEXT NOT NULL DEFAULT 'حضوری'")?;
+    ensure_column(conn, "attachments", "track_id", "track_id INTEGER")?;
+    ensure_column(conn, "attachments", "related_type", "related_type TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(conn, "attachments", "related_id", "related_id INTEGER")?;
+    ensure_column(conn, "nutrition_calculations", "track_id", "track_id INTEGER")?;
+    ensure_column(conn, "diet_plans", "track_id", "track_id INTEGER")?;
 
     let service_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM service_catalog", [], |row| row.get(0))
@@ -1030,26 +1156,184 @@ fn save_client_record(state: tauri::State<'_, AppState>, record: ClientRecord) -
     }
 }
 
+fn track_type_for_visit_type(visit_type: &str) -> &'static str {
+    match visit_type {
+        "body_analysis" => "body_analysis",
+        "device" => "device",
+        "consultation" => "consultation",
+        "combined" => "combined",
+        _ => "diet",
+    }
+}
+
+fn care_track_title(track_type: &str) -> &'static str {
+    match track_type {
+        "body_analysis" => "بادی آنالیز",
+        "device" => "دستگاه و خدمات موضعی",
+        "consultation" => "مشاوره تغذیه",
+        "combined" => "مراقبت ترکیبی",
+        _ => "رژیم غذایی",
+    }
+}
+
+fn row_to_care_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CareTrack> {
+    Ok(CareTrack {
+        id: row.get(0)?,
+        client_id: row.get(1)?,
+        track_type: row.get(2)?,
+        goal: row.get(3)?,
+        title: row.get(4)?,
+        start_date: row.get(5)?,
+        status: row.get(6)?,
+        target_weight: row.get(7)?,
+        notes: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
+}
+
+fn list_client_care_tracks_inner(conn: &Connection, client_id: i64) -> Result<Vec<CareTrack>, String> {
+    let mut stmt = conn.prepare(
+        "SELECT id, client_id, track_type, goal, title, start_date, status, target_weight, notes, created_at, updated_at FROM care_tracks WHERE client_id=?1 ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END, start_date DESC, id DESC"
+    ).map_err(|err| err.to_string())?;
+    let items = stmt.query_map(params![client_id], row_to_care_track)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+fn ensure_care_track_inner(conn: &Connection, client_id: i64, track_type: &str, _source: &str, timestamp: &str) -> Result<i64, String> {
+    let existing: Option<i64> = conn.query_row(
+        "SELECT id FROM care_tracks WHERE client_id=?1 AND track_type=?2 AND status IN ('active','paused') ORDER BY id DESC LIMIT 1",
+        params![client_id, track_type],
+        |row| row.get(0),
+    ).optional().map_err(|err| err.to_string())?;
+    if let Some(id) = existing { return Ok(id); }
+    let goal: String = conn.query_row("SELECT goal FROM clients WHERE id=?1", params![client_id], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    conn.execute(
+        "INSERT INTO care_tracks (client_id, track_type, goal, title, start_date, status, target_weight, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,'active',NULL,'',?6,?6)",
+        params![client_id, track_type, goal, care_track_title(track_type), Utc::now().date_naive().to_string(), timestamp],
+    ).map_err(|err| err.to_string())?;
+    Ok(conn.last_insert_rowid())
+}
+
+#[tauri::command]
+fn list_client_care_tracks(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<CareTrack>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    get_client(&conn, client_id)?;
+    list_client_care_tracks_inner(&conn, client_id)
+}
+
+#[tauri::command]
+fn save_care_track(state: tauri::State<'_, AppState>, item: CareTrack) -> Result<CareTrack, String> {
+    if item.client_id <= 0 { return Err("مراجع برای مسیر مراقبت مشخص نشده است.".to_string()); }
+    if item.title.trim().is_empty() { return Err("عنوان مسیر مراقبت الزامی است.".to_string()); }
+    if !is_valid_iso_date(&item.start_date) { return Err("تاریخ شروع مسیر معتبر نیست.".to_string()); }
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    get_client(&conn, item.client_id)?;
+    let timestamp = now();
+    let id = if let Some(id) = item.id {
+        conn.execute(
+            "UPDATE care_tracks SET track_type=?1, goal=?2, title=?3, start_date=?4, status=?5, target_weight=?6, notes=?7, updated_at=?8 WHERE id=?9 AND client_id=?10",
+            params![item.track_type, item.goal, item.title, item.start_date, item.status, item.target_weight, item.notes, timestamp, id, item.client_id],
+        ).map_err(|err| err.to_string())?;
+        id
+    } else {
+        conn.execute(
+            "INSERT INTO care_tracks (client_id, track_type, goal, title, start_date, status, target_weight, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+            params![item.client_id, item.track_type, item.goal, item.title, item.start_date, item.status, item.target_weight, item.notes, timestamp],
+        ).map_err(|err| err.to_string())?;
+        conn.last_insert_rowid()
+    };
+    conn.query_row(
+        "SELECT id, client_id, track_type, goal, title, start_date, status, target_weight, notes, created_at, updated_at FROM care_tracks WHERE id=?1",
+        params![id], row_to_care_track,
+    ).map_err(|err| err.to_string())
+}
+
+fn row_to_measurement_value(row: &rusqlite::Row<'_>) -> rusqlite::Result<MeasurementValue> {
+    Ok(MeasurementValue {
+        id: row.get(0)?, visit_id: row.get(1)?, metric_key: row.get(2)?, side: row.get(3)?,
+        value: row.get(4)?, unit: row.get(5)?, created_at: row.get(6)?, updated_at: row.get(7)?,
+    })
+}
+
+fn list_measurement_values_inner(conn: &Connection, visit_id: i64) -> Result<Vec<MeasurementValue>, String> {
+    let mut stmt = conn.prepare("SELECT id, visit_id, metric_key, side, value, unit, created_at, updated_at FROM measurement_values WHERE visit_id=?1 ORDER BY metric_key, side")
+        .map_err(|err| err.to_string())?;
+    let values = stmt.query_map(params![visit_id], row_to_measurement_value)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(values)
+}
+
+fn insert_measurement_value(conn: &Connection, visit_id: i64, key: &str, side: &str, value: Option<f64>, unit: &str, timestamp: &str) -> Result<(), String> {
+    if let Some(value) = value.filter(|value| value.is_finite()) {
+        conn.execute(
+            "INSERT INTO measurement_values (visit_id, metric_key, side, value, unit, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?6) ON CONFLICT(visit_id, metric_key, side) DO UPDATE SET value=excluded.value, unit=excluded.unit, updated_at=excluded.updated_at",
+            params![visit_id, key, side, value, unit, timestamp],
+        ).map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+fn sync_measurement_values(conn: &Connection, measurements: &VisitMeasurements, timestamp: &str) -> Result<(), String> {
+    let visit_id = measurements.visit_id.ok_or_else(|| "شناسه ویزیت برای شاخص‌ها لازم است.".to_string())?;
+    conn.execute("DELETE FROM measurement_values WHERE visit_id=?1", params![visit_id]).map_err(|err| err.to_string())?;
+    let standard = [
+        ("weight", "center", Some(measurements.weight_kg), "kg"),
+        ("bmi", "center", measurements.bmi_snapshot, ""),
+        ("body_fat_percent", "center", measurements.body_fat_percent, "%"),
+        ("muscle_mass", "center", measurements.muscle_mass, "kg"),
+        ("visceral_fat", "center", measurements.visceral_fat, ""),
+        ("waist", "center", measurements.waist_cm, "cm"),
+        ("abdomen", "center", measurements.abdomen_cm, "cm"),
+        ("hip", "center", measurements.hip_cm, "cm"),
+        ("chest", "center", measurements.chest_cm, "cm"),
+        ("arm", "center", measurements.arm_cm, "cm"),
+        ("thigh", "center", measurements.thigh_cm, "cm"),
+        ("calf", "center", measurements.calf_cm, "cm"),
+        ("neck", "center", measurements.neck_cm, "cm"),
+    ];
+    for (key, side, value, unit) in standard { insert_measurement_value(conn, visit_id, key, side, value, unit, timestamp)?; }
+
+    if let Some(raw) = measurements.custom_measurements_json.as_deref() {
+        if let Ok(values) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(raw) {
+            for (key, raw_value) in values {
+                let value = raw_value.as_f64().or_else(|| raw_value.as_str().and_then(|item| item.parse::<f64>().ok()));
+                let side = if key.contains("_left_") { "left" } else if key.contains("_right_") { "right" } else { "center" };
+                let unit = if key.contains("percent") { "%" } else if key.contains("age") { "year" } else if key.contains("score") { "" } else if key.ends_with("_kg") { "kg" } else { "cm" };
+                insert_measurement_value(conn, visit_id, &key, side, value, unit, timestamp)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn row_to_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visit> {
     Ok(Visit {
         id: row.get(0)?,
         client_id: row.get(1)?,
-        visit_date: row.get(2)?,
-        visit_time: row.get(3)?,
-        status: row.get(4)?,
-        reason: row.get(5)?,
-        clinical_notes: row.get(6)?,
-        private_notes: row.get(7)?,
-        next_visit_enabled: row.get::<_, i64>(8)? == 1,
-        next_visit_date: row.get(9)?,
-        next_visit_time: row.get(10)?,
-        next_visit_status: row.get(11)?,
-        total_fee: row.get(12)?,
-        created_at: row.get(13)?,
-        updated_at: row.get(14)?,
-        visit_type: row.get(15)?,
-        visit_mode_key: row.get(16)?,
-        visit_mode_name_snapshot: row.get(17)?,
+        track_id: row.get(2)?,
+        visit_date: row.get(3)?,
+        visit_time: row.get(4)?,
+        status: row.get(5)?,
+        reason: row.get(6)?,
+        clinical_notes: row.get(7)?,
+        private_notes: row.get(8)?,
+        next_visit_enabled: row.get::<_, i64>(9)? == 1,
+        next_visit_date: row.get(10)?,
+        next_visit_time: row.get(11)?,
+        next_visit_status: row.get(12)?,
+        total_fee: row.get(13)?,
+        created_at: row.get(14)?,
+        updated_at: row.get(15)?,
+        visit_type: row.get(16)?,
+        visit_mode_key: row.get(17)?,
+        visit_mode_name_snapshot: row.get(18)?,
     })
 }
 
@@ -1090,7 +1374,7 @@ fn get_measurements_for_visit(conn: &Connection, visit_id: i64) -> Result<Option
 
 fn get_visit(conn: &Connection, id: i64) -> Result<Visit, String> {
     conn.query_row(
-        "SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE id = ?1",
+        "SELECT id, client_id, track_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE id = ?1",
         params![id],
         row_to_visit,
     )
@@ -1109,7 +1393,7 @@ fn get_visit_detail_inner(conn: &Connection, id: i64) -> Result<VisitDetail, Str
 fn list_client_visits(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<VisitDetail>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
+        .prepare("SELECT id, client_id, track_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
         .map_err(|err| err.to_string())?;
     let visits = stmt
         .query_map(params![client_id], row_to_visit)
@@ -1146,11 +1430,17 @@ fn save_visit_with_measurements(
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     get_client(&conn, visit.client_id)?;
     let timestamp = now();
+    let inferred_track_type = track_type_for_visit_type(&visit.visit_type);
+    let track_id = match visit.track_id {
+        Some(id) => Some(id),
+        None => Some(ensure_care_track_inner(&conn, visit.client_id, inferred_track_type, &visit.visit_type, &timestamp)?),
+    };
 
     let visit_id = if let Some(id) = visit.id {
         conn.execute(
-            "UPDATE visits SET visit_date=?1, visit_time=?2, status=?3, reason=?4, clinical_notes=?5, private_notes=?6, next_visit_enabled=?7, next_visit_date=?8, next_visit_time=?9, next_visit_status=?10, total_fee=?11, visit_type=?12, visit_mode_key=?13, visit_mode_name_snapshot=?14, updated_at=?15 WHERE id=?16",
+            "UPDATE visits SET track_id=?1, visit_date=?2, visit_time=?3, status=?4, reason=?5, clinical_notes=?6, private_notes=?7, next_visit_enabled=?8, next_visit_date=?9, next_visit_time=?10, next_visit_status=?11, total_fee=?12, visit_type=?13, visit_mode_key=?14, visit_mode_name_snapshot=?15, updated_at=?16 WHERE id=?17",
             params![
+                track_id,
                 visit.visit_date,
                 visit.visit_time,
                 visit.status,
@@ -1173,9 +1463,10 @@ fn save_visit_with_measurements(
         id
     } else {
         conn.execute(
-            "INSERT INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, visit_type, visit_mode_key, visit_mode_name_snapshot, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
+            "INSERT INTO visits (client_id, track_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, visit_type, visit_mode_key, visit_mode_name_snapshot, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)",
             params![
                 visit.client_id,
+                track_id,
                 visit.visit_date,
                 visit.visit_time,
                 visit.status,
@@ -1215,6 +1506,8 @@ fn save_visit_measurements_inner(conn: &Connection, measurements: VisitMeasureme
         .or_else(|| measurements.height_cm.filter(|height| *height > 0.0).map(|height| measurements.weight_kg / ((height / 100.0) * (height / 100.0))));
     let notes = measurements.notes.clone();
     let custom_measurements_json = measurements.custom_measurements_json.clone();
+    let mut normalized_measurements = measurements.clone();
+    normalized_measurements.bmi_snapshot = bmi_snapshot;
 
     conn.execute(
         "INSERT INTO visit_measurements (visit_id, weight_kg, height_cm, bmi_snapshot, body_fat_percent, muscle_mass, visceral_fat, waist_cm, abdomen_cm, hip_cm, chest_cm, arm_cm, thigh_cm, calf_cm, neck_cm, custom_measurements_json, notes, created_at, updated_at)
@@ -1242,6 +1535,7 @@ fn save_visit_measurements_inner(conn: &Connection, measurements: VisitMeasureme
         ],
     )
     .map_err(|err| err.to_string())?;
+    sync_measurement_values(conn, &normalized_measurements, &timestamp)?;
 
     conn.execute(
         "INSERT INTO client_records (client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at)
@@ -1481,17 +1775,17 @@ fn save_visit_mode(state: tauri::State<'_, AppState>, mut item: VisitModeOption)
 
 fn row_to_nutrition_calculation(row: &rusqlite::Row<'_>) -> rusqlite::Result<NutritionCalculation> {
     Ok(NutritionCalculation {
-        id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, calculated_at: row.get(3)?,
-        gender: row.get(4)?, age: row.get(5)?, height_cm: row.get(6)?, weight_kg: row.get(7)?,
-        activity_level: row.get(8)?, goal: row.get(9)?, bmi: row.get(10)?, ibw: row.get(11)?,
-        abw: row.get(12)?, bmr: row.get(13)?, tee: row.get(14)?, target_calories: row.get(15)?,
-        calorie_adjustment_percent: row.get(16)?, protein_percent: row.get(17)?, carb_percent: row.get(18)?,
-        fat_percent: row.get(19)?, protein_g: row.get(20)?, carb_g: row.get(21)?, fat_g: row.get(22)?,
-        notes: row.get(23)?, created_at: row.get(24)?, updated_at: row.get(25)?,
+        id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, track_id: row.get(3)?, calculated_at: row.get(4)?,
+        gender: row.get(5)?, age: row.get(6)?, height_cm: row.get(7)?, weight_kg: row.get(8)?,
+        activity_level: row.get(9)?, goal: row.get(10)?, bmi: row.get(11)?, ibw: row.get(12)?,
+        abw: row.get(13)?, bmr: row.get(14)?, tee: row.get(15)?, target_calories: row.get(16)?,
+        calorie_adjustment_percent: row.get(17)?, protein_percent: row.get(18)?, carb_percent: row.get(19)?,
+        fat_percent: row.get(20)?, protein_g: row.get(21)?, carb_g: row.get(22)?, fat_g: row.get(23)?,
+        notes: row.get(24)?, created_at: row.get(25)?, updated_at: row.get(26)?,
     })
 }
 
-const NUTRITION_CALC_SELECT: &str = "SELECT id, client_id, visit_id, calculated_at, gender, age, height_cm, weight_kg, activity_level, goal, bmi, ibw, abw, bmr, tee, target_calories, calorie_adjustment_percent, protein_percent, carb_percent, fat_percent, protein_g, carb_g, fat_g, notes, created_at, updated_at FROM nutrition_calculations";
+const NUTRITION_CALC_SELECT: &str = "SELECT id, client_id, visit_id, track_id, calculated_at, gender, age, height_cm, weight_kg, activity_level, goal, bmi, ibw, abw, bmr, tee, target_calories, calorie_adjustment_percent, protein_percent, carb_percent, fat_percent, protein_g, carb_g, fat_g, notes, created_at, updated_at FROM nutrition_calculations";
 
 #[tauri::command]
 fn list_client_nutrition_calculations(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<NutritionCalculation>, String> {
@@ -1511,15 +1805,19 @@ fn save_nutrition_calculation(state: tauri::State<'_, AppState>, item: Nutrition
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     get_client(&conn, item.client_id)?;
     let timestamp = now();
+    let track_id = match item.track_id {
+        Some(id) => Some(id),
+        None => Some(ensure_care_track_inner(&conn, item.client_id, "diet", "nutrition_calculation", &timestamp)?),
+    };
     let calculated_at = if item.calculated_at.trim().is_empty() { Utc::now().date_naive().to_string() } else { item.calculated_at.clone() };
     let id = if let Some(id) = item.id {
-        conn.execute("UPDATE nutrition_calculations SET visit_id=?1, calculated_at=?2, gender=?3, age=?4, height_cm=?5, weight_kg=?6, activity_level=?7, goal=?8, bmi=?9, ibw=?10, abw=?11, bmr=?12, tee=?13, target_calories=?14, calorie_adjustment_percent=?15, protein_percent=?16, carb_percent=?17, fat_percent=?18, protein_g=?19, carb_g=?20, fat_g=?21, notes=?22, updated_at=?23 WHERE id=?24 AND client_id=?25",
-            params![item.visit_id, calculated_at, item.gender, item.age, item.height_cm, item.weight_kg, item.activity_level, item.goal, item.bmi, item.ibw, item.abw, item.bmr, item.tee, item.target_calories, item.calorie_adjustment_percent, item.protein_percent, item.carb_percent, item.fat_percent, item.protein_g, item.carb_g, item.fat_g, item.notes, timestamp, id, item.client_id])
+        conn.execute("UPDATE nutrition_calculations SET visit_id=?1, track_id=?2, calculated_at=?3, gender=?4, age=?5, height_cm=?6, weight_kg=?7, activity_level=?8, goal=?9, bmi=?10, ibw=?11, abw=?12, bmr=?13, tee=?14, target_calories=?15, calorie_adjustment_percent=?16, protein_percent=?17, carb_percent=?18, fat_percent=?19, protein_g=?20, carb_g=?21, fat_g=?22, notes=?23, updated_at=?24 WHERE id=?25 AND client_id=?26",
+            params![item.visit_id, track_id, calculated_at, item.gender, item.age, item.height_cm, item.weight_kg, item.activity_level, item.goal, item.bmi, item.ibw, item.abw, item.bmr, item.tee, item.target_calories, item.calorie_adjustment_percent, item.protein_percent, item.carb_percent, item.fat_percent, item.protein_g, item.carb_g, item.fat_g, item.notes, timestamp, id, item.client_id])
             .map_err(|err| err.to_string())?;
         id
     } else {
-        conn.execute("INSERT INTO nutrition_calculations (client_id, visit_id, calculated_at, gender, age, height_cm, weight_kg, activity_level, goal, bmi, ibw, abw, bmr, tee, target_calories, calorie_adjustment_percent, protein_percent, carb_percent, fat_percent, protein_g, carb_g, fat_g, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?24)",
-            params![item.client_id, item.visit_id, calculated_at, item.gender, item.age, item.height_cm, item.weight_kg, item.activity_level, item.goal, item.bmi, item.ibw, item.abw, item.bmr, item.tee, item.target_calories, item.calorie_adjustment_percent, item.protein_percent, item.carb_percent, item.fat_percent, item.protein_g, item.carb_g, item.fat_g, item.notes, timestamp])
+        conn.execute("INSERT INTO nutrition_calculations (client_id, visit_id, track_id, calculated_at, gender, age, height_cm, weight_kg, activity_level, goal, bmi, ibw, abw, bmr, tee, target_calories, calorie_adjustment_percent, protein_percent, carb_percent, fat_percent, protein_g, carb_g, fat_g, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?25)",
+            params![item.client_id, item.visit_id, track_id, calculated_at, item.gender, item.age, item.height_cm, item.weight_kg, item.activity_level, item.goal, item.bmi, item.ibw, item.abw, item.bmr, item.tee, item.target_calories, item.calorie_adjustment_percent, item.protein_percent, item.carb_percent, item.fat_percent, item.protein_g, item.carb_g, item.fat_g, item.notes, timestamp])
             .map_err(|err| err.to_string())?;
         conn.last_insert_rowid()
     };
@@ -1528,15 +1826,15 @@ fn save_nutrition_calculation(state: tauri::State<'_, AppState>, item: Nutrition
 
 fn row_to_diet_plan(row: &rusqlite::Row<'_>) -> rusqlite::Result<DietPlan> {
     Ok(DietPlan {
-        id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, calculation_id: row.get(3)?,
-        title: row.get(4)?, plan_date: row.get(5)?, status: row.get(6)?, calories_target: row.get(7)?,
-        protein_target_g: row.get(8)?, carb_target_g: row.get(9)?, fat_target_g: row.get(10)?, meals_json: row.get(11)?,
-        hydration_text: row.get(12)?, activity_text: row.get(13)?, guidance_text: row.get(14)?, notes: row.get(15)?,
-        created_at: row.get(16)?, updated_at: row.get(17)?,
+        id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, track_id: row.get(3)?, calculation_id: row.get(4)?,
+        title: row.get(5)?, plan_date: row.get(6)?, status: row.get(7)?, calories_target: row.get(8)?,
+        protein_target_g: row.get(9)?, carb_target_g: row.get(10)?, fat_target_g: row.get(11)?, meals_json: row.get(12)?,
+        hydration_text: row.get(13)?, activity_text: row.get(14)?, guidance_text: row.get(15)?, notes: row.get(16)?,
+        created_at: row.get(17)?, updated_at: row.get(18)?,
     })
 }
 
-const DIET_PLAN_SELECT: &str = "SELECT id, client_id, visit_id, calculation_id, title, plan_date, status, calories_target, protein_target_g, carb_target_g, fat_target_g, meals_json, hydration_text, activity_text, guidance_text, notes, created_at, updated_at FROM diet_plans";
+const DIET_PLAN_SELECT: &str = "SELECT id, client_id, visit_id, track_id, calculation_id, title, plan_date, status, calories_target, protein_target_g, carb_target_g, fat_target_g, meals_json, hydration_text, activity_text, guidance_text, notes, created_at, updated_at FROM diet_plans";
 
 #[tauri::command]
 fn list_client_diet_plans(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<DietPlan>, String> {
@@ -1555,14 +1853,18 @@ fn save_diet_plan(state: tauri::State<'_, AppState>, plan: DietPlan) -> Result<D
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     get_client(&conn, plan.client_id)?;
     let timestamp = now();
+    let track_id = match plan.track_id {
+        Some(id) => Some(id),
+        None => Some(ensure_care_track_inner(&conn, plan.client_id, "diet", "diet_plan", &timestamp)?),
+    };
     let id = if let Some(id) = plan.id {
-        conn.execute("UPDATE diet_plans SET visit_id=?1, calculation_id=?2, title=?3, plan_date=?4, status=?5, calories_target=?6, protein_target_g=?7, carb_target_g=?8, fat_target_g=?9, meals_json=?10, hydration_text=?11, activity_text=?12, guidance_text=?13, notes=?14, updated_at=?15 WHERE id=?16 AND client_id=?17",
-            params![plan.visit_id, plan.calculation_id, plan.title, plan.plan_date, plan.status, plan.calories_target, plan.protein_target_g, plan.carb_target_g, plan.fat_target_g, plan.meals_json, plan.hydration_text, plan.activity_text, plan.guidance_text, plan.notes, timestamp, id, plan.client_id])
+        conn.execute("UPDATE diet_plans SET visit_id=?1, track_id=?2, calculation_id=?3, title=?4, plan_date=?5, status=?6, calories_target=?7, protein_target_g=?8, carb_target_g=?9, fat_target_g=?10, meals_json=?11, hydration_text=?12, activity_text=?13, guidance_text=?14, notes=?15, updated_at=?16 WHERE id=?17 AND client_id=?18",
+            params![plan.visit_id, track_id, plan.calculation_id, plan.title, plan.plan_date, plan.status, plan.calories_target, plan.protein_target_g, plan.carb_target_g, plan.fat_target_g, plan.meals_json, plan.hydration_text, plan.activity_text, plan.guidance_text, plan.notes, timestamp, id, plan.client_id])
             .map_err(|err| err.to_string())?;
         id
     } else {
-        conn.execute("INSERT INTO diet_plans (client_id, visit_id, calculation_id, title, plan_date, status, calories_target, protein_target_g, carb_target_g, fat_target_g, meals_json, hydration_text, activity_text, guidance_text, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16)",
-            params![plan.client_id, plan.visit_id, plan.calculation_id, plan.title, plan.plan_date, plan.status, plan.calories_target, plan.protein_target_g, plan.carb_target_g, plan.fat_target_g, plan.meals_json, plan.hydration_text, plan.activity_text, plan.guidance_text, plan.notes, timestamp])
+        conn.execute("INSERT INTO diet_plans (client_id, visit_id, track_id, calculation_id, title, plan_date, status, calories_target, protein_target_g, carb_target_g, fat_target_g, meals_json, hydration_text, activity_text, guidance_text, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?17)",
+            params![plan.client_id, plan.visit_id, track_id, plan.calculation_id, plan.title, plan.plan_date, plan.status, plan.calories_target, plan.protein_target_g, plan.carb_target_g, plan.fat_target_g, plan.meals_json, plan.hydration_text, plan.activity_text, plan.guidance_text, plan.notes, timestamp])
             .map_err(|err| err.to_string())?;
         conn.last_insert_rowid()
     };
@@ -1570,7 +1872,7 @@ fn save_diet_plan(state: tauri::State<'_, AppState>, plan: DietPlan) -> Result<D
 }
 
 fn build_diet_plan_html(conn: &Connection, client: &Client, plan: &DietPlan) -> Result<String, String> {
-    let clinic_name = read_setting_or(conn, "clinic_name", "Dietoy")?;
+    let clinic_name = read_setting_or(conn, "clinic_name", "Dietory")?;
     let dietitian_name = read_setting_or(conn, "dietitian_name", "")?;
     let header_title = read_setting_or(conn, "diet_plan_header_title", "برنامه غذایی اختصاصی")?;
     let footer_text = read_setting_or(conn, "diet_plan_footer_text", "این برنامه بر اساس شرایط فردی مراجع تنظیم شده است.")?;
@@ -1607,7 +1909,7 @@ fn build_diet_plan_html(conn: &Connection, client: &Client, plan: &DietPlan) -> 
     let calorie_block = if show_calories { format!("<div class=target primary><span>کالری روزانه</span><b>{} kcal</b></div>", number(plan.calories_target,0)) } else { String::new() };
     Ok(format!(r#"<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8><title>{title}</title><style>
 @page{{size:A4;margin:{margin}mm}}*{{box-sizing:border-box}}body{{font-family:Vazirmatn,Tahoma,Arial,sans-serif;color:#143c4c;background:#eef7f5;margin:0;line-height:1.75}}.toolbar{{position:sticky;top:0;z-index:3;background:#0F5079;color:#fff;padding:11px 20px;display:flex;justify-content:space-between;align-items:center}}button{{font:inherit;border:0;border-radius:12px;padding:9px 16px;font-weight:800;color:#0F5079;background:#8AE3C3;cursor:pointer}}main{{max-width:920px;margin:24px auto;background:#fff;border-radius:28px;overflow:hidden;box-shadow:0 24px 80px #0f507926}}header{{padding:30px 34px;background:linear-gradient(135deg,#0F5079,#16788a);color:#fff;position:relative}}header:after{{content:'';position:absolute;width:260px;height:260px;border-radius:50%;background:#8AE3C31f;left:-80px;top:-130px}}.logo{{display:block;width:92px;height:92px;object-fit:contain;border-radius:18px;margin-bottom:12px;box-shadow:0 10px 28px #063b5c55}}.brand{{font-size:13px;color:#b9f3df}}h1{{font-size:32px;margin:10px 0 2px}}header p{{margin:0;opacity:.9}}.targets{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:20px 34px;background:#f7fcfa}}.target{{border:1px solid #dbece6;border-radius:16px;padding:12px;background:#fff}}.target span{{display:block;font-size:12px;color:#72847f}}.target b{{font-size:19px;color:#0F5079}}.target.primary{{background:#e4f8f1;border-color:#8AE3C3}}.content{{padding:28px 34px}}.meal{{border:1px solid #dce9e5;border-radius:20px;overflow:hidden;margin-bottom:18px;break-inside:avoid}}.meal-head{{padding:14px 18px;background:linear-gradient(90deg,#effaf6,#fff)}}.meal-head span{{font-size:11px;color:#729187}}.meal h2{{margin:2px 0;color:#0F5079;font-size:20px}}table{{width:100%;border-collapse:collapse}}td{{padding:11px 16px;border-top:1px solid #edf2f0;vertical-align:top}}td:nth-child(2),td:nth-child(3){{width:22%;white-space:nowrap}}td small{{display:block;color:#7d8c87;font-size:10px}}.meal-note{{padding:10px 16px;margin:0;background:#fbfdfc;color:#526a62}}.guides{{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:24px}}.guide{{border-radius:18px;padding:15px;background:#f4faf8;border:1px solid #e0ece8}}.guide h3{{margin:0 0 6px;color:#0F5079}}.guide p{{white-space:pre-wrap;margin:0}}footer{{padding:18px 34px;border-top:1px solid #e6efec;text-align:center;color:#70817c;font-size:11px}}.empty{{text-align:center;color:#82918c}}@media print{{body{{background:#fff}}.toolbar{{display:none}}main{{margin:0;max-width:none;border-radius:0;box-shadow:none}}header{{-webkit-print-color-adjust:exact;print-color-adjust:exact}}}}@media(max-width:700px){{.targets{{grid-template-columns:repeat(2,1fr)}}.guides{{grid-template-columns:1fr}}}}
-</style></head><body><div class=toolbar><strong>پیش‌نمایش برنامه غذایی</strong><button onclick=window.print()>چاپ / ذخیره PDF</button></div><main><header><img class=logo src="{logo}" alt="Dietoy"><div class=brand>{clinic} · {dietitian}</div><h1>{header}</h1><p>{client} · تاریخ برنامه: <time data-date='{date}'>{date}</time></p></header><div class=targets>{calorie}{macros}</div><div class=content>{meals}<div class=guides><div class=guide><h3>آب و مایعات</h3><p>{hydration}</p></div><div class=guide><h3>فعالیت</h3><p>{activity}</p></div><div class=guide><h3>راهنمای اجرا</h3><p>{guidance}</p></div><div class=guide><h3>یادداشت متخصص</h3><p>{notes}</p></div></div></div><footer>{footer}</footer></main><script>document.querySelectorAll('time[data-date]').forEach(function(el){{var d=new Date(el.dataset.date+'T00:00:00');if(!isNaN(d))el.textContent=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{{year:'numeric',month:'long',day:'numeric'}}).format(d)}})</script></body></html>"#,
+</style></head><body><div class=toolbar><strong>پیش‌نمایش برنامه غذایی</strong><button onclick=window.print()>چاپ / ذخیره PDF</button></div><main><header><img class=logo src="{logo}" alt="Dietory"><div class=brand>{clinic} · {dietitian}</div><h1>{header}</h1><p>{client} · تاریخ برنامه: <time data-date='{date}'>{date}</time></p></header><div class=targets>{calorie}{macros}</div><div class=content>{meals}<div class=guides><div class=guide><h3>آب و مایعات</h3><p>{hydration}</p></div><div class=guide><h3>فعالیت</h3><p>{activity}</p></div><div class=guide><h3>راهنمای اجرا</h3><p>{guidance}</p></div><div class=guide><h3>یادداشت متخصص</h3><p>{notes}</p></div></div></div><footer>{footer}</footer></main><script>document.querySelectorAll('time[data-date]').forEach(function(el){{var d=new Date(el.dataset.date+'T00:00:00');if(!isNaN(d))el.textContent=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{{year:'numeric',month:'long',day:'numeric'}}).format(d)}})</script></body></html>"#,
         title=escape_html(&plan.title), margin=margin, logo=logo_src, clinic=escape_html(&clinic_name), dietitian=escape_html(&dietitian_name), header=escape_html(&header_title), client=escape_html(&client.full_name), date=escape_html(&plan.plan_date), calorie=calorie_block, macros=macro_block, meals=meals_html, hydration=escape_html(non_empty(&plan.hydration_text,"طبق توصیه متخصص")), activity=escape_html(non_empty(&plan.activity_text,"طبق برنامه فردی")), guidance=escape_html(non_empty(&plan.guidance_text,"وعده‌ها را منظم و مطابق مقادیر نوشته‌شده مصرف کنید.")), notes=escape_html(non_empty(&plan.notes,"—")), footer=escape_html(&footer_text)))
 }
 
@@ -1632,13 +1934,16 @@ fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> {
         id: row.get(0)?,
         client_id: row.get(1)?,
         visit_id: row.get(2)?,
-        category: row.get(3)?,
-        title: row.get(4)?,
-        file_name: row.get(5)?,
-        local_path: row.get(6)?,
-        attachment_date: row.get(7)?,
-        notes: row.get(8)?,
-        created_at: row.get(9)?,
+        track_id: row.get(3)?,
+        related_type: row.get(4)?,
+        related_id: row.get(5)?,
+        category: row.get(6)?,
+        title: row.get(7)?,
+        file_name: row.get(8)?,
+        local_path: row.get(9)?,
+        attachment_date: row.get(10)?,
+        notes: row.get(11)?,
+        created_at: row.get(12)?,
     })
 }
 
@@ -1683,7 +1988,10 @@ fn import_attachment_inner(
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     get_client(&conn, attachment.client_id)?;
     if let Some(visit_id) = attachment.visit_id {
-        get_visit(&conn, visit_id)?;
+        let visit = get_visit(&conn, visit_id)?;
+        if attachment.track_id.is_none() { attachment.track_id = visit.track_id; }
+        if attachment.related_type.is_empty() { attachment.related_type = "visit".to_string(); }
+        if attachment.related_id.is_none() { attachment.related_id = Some(visit_id); }
     }
     let file_name = source
         .file_name()
@@ -1718,12 +2026,12 @@ fn import_attachment_inner(
         attachment.attachment_date = Utc::now().date_naive().to_string();
     }
     conn.execute(
-        "INSERT INTO attachments (client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![attachment.client_id, attachment.visit_id, attachment.category, attachment.title, attachment.file_name, attachment.local_path, attachment.attachment_date, attachment.notes, timestamp],
+        "INSERT INTO attachments (client_id, visit_id, track_id, related_type, related_id, category, title, file_name, local_path, attachment_date, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![attachment.client_id, attachment.visit_id, attachment.track_id, attachment.related_type, attachment.related_id, attachment.category, attachment.title, attachment.file_name, attachment.local_path, attachment.attachment_date, attachment.notes, timestamp],
     )
     .map_err(|err| err.to_string())?;
     let id = conn.last_insert_rowid();
-    conn.query_row("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE id=?1", params![id], row_to_attachment)
+    conn.query_row("SELECT id, client_id, visit_id, track_id, related_type, related_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE id=?1", params![id], row_to_attachment)
         .map_err(|err| err.to_string())
 }
 
@@ -1751,6 +2059,9 @@ fn import_attachment(
         id: None,
         client_id,
         visit_id,
+        track_id: None,
+        related_type: if visit_id.is_some() { "visit".to_string() } else { "client".to_string() },
+        related_id: visit_id,
         category: if category.trim().is_empty() { "other".to_string() } else { category },
         title,
         file_name: String::new(),
@@ -1767,7 +2078,7 @@ fn import_attachment(
 fn list_client_attachments(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<Attachment>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
+        .prepare("SELECT id, client_id, visit_id, track_id, related_type, related_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
         .map_err(|err| err.to_string())?;
     let items = stmt
         .query_map(params![client_id], row_to_attachment)
@@ -1822,6 +2133,35 @@ fn open_attachment(state: tauri::State<'_, AppState>, attachment_id: i64) -> Res
         .map_err(|err| err.to_string())?
         .ok_or_else(|| "فایل پیوست پیدا نشد.".to_string())?;
     open_path_with_system(PathBuf::from(path))
+}
+
+#[tauri::command]
+fn read_attachment_preview(state: tauri::State<'_, AppState>, attachment_id: i64) -> Result<AttachmentPreview, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let (path, file_name): (String, String) = conn.query_row(
+        "SELECT local_path, file_name FROM attachments WHERE id=?1",
+        params![attachment_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(|err| err.to_string())?
+        .ok_or_else(|| "فایل پیوست پیدا نشد.".to_string())?;
+    drop(conn);
+    let path = PathBuf::from(path);
+    let metadata = fs::metadata(&path).map_err(|err| format!("خواندن مشخصات فایل انجام نشد: {err}"))?;
+    if metadata.len() > 40 * 1024 * 1024 {
+        return Err("حجم فایل برای پیش‌نمایش داخل اپ بیشتر از ۴۰ مگابایت است؛ از گزینه بازکردن کامل استفاده کنید.".to_string());
+    }
+    let bytes = fs::read(&path).map_err(|err| format!("خواندن فایل انجام نشد: {err}"))?;
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_lowercase();
+    let mime_type = match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        _ => "application/octet-stream",
+    }.to_string();
+    Ok(AttachmentPreview { mime_type, base64_data: base64_encode(&bytes), file_name })
 }
 
 
@@ -2017,7 +2357,7 @@ fn list_visit_services_inner(conn: &Connection, visit_id: i64) -> Result<Vec<Vis
 
 fn list_client_attachments_inner(conn: &Connection, client_id: i64) -> Result<Vec<Attachment>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, client_id, visit_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
+        .prepare("SELECT id, client_id, visit_id, track_id, related_type, related_id, category, title, file_name, local_path, attachment_date, notes, created_at FROM attachments WHERE client_id=?1 ORDER BY attachment_date DESC, id DESC")
         .map_err(|err| err.to_string())?;
     let items = stmt
         .query_map(params![client_id], row_to_attachment)
@@ -2025,6 +2365,91 @@ fn list_client_attachments_inner(conn: &Connection, client_id: i64) -> Result<Ve
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())?;
     Ok(items)
+}
+
+fn list_client_nutrition_calculations_inner(conn: &Connection, client_id: i64) -> Result<Vec<NutritionCalculation>, String> {
+    let mut stmt = conn.prepare(&format!("{} WHERE client_id=?1 ORDER BY calculated_at DESC, id DESC", NUTRITION_CALC_SELECT))
+        .map_err(|err| err.to_string())?;
+    let items = stmt.query_map(params![client_id], row_to_nutrition_calculation)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+fn list_client_diet_plans_inner(conn: &Connection, client_id: i64) -> Result<Vec<DietPlan>, String> {
+    let mut stmt = conn.prepare(&format!("{} WHERE client_id=?1 ORDER BY plan_date DESC, id DESC", DIET_PLAN_SELECT))
+        .map_err(|err| err.to_string())?;
+    let items = stmt.query_map(params![client_id], row_to_diet_plan)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+#[tauri::command]
+fn get_client_profile_bundle(state: tauri::State<'_, AppState>, client_id: i64) -> Result<ClientProfileBundle, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let client = get_client(&conn, client_id)?;
+    let care_tracks = list_client_care_tracks_inner(&conn, client_id)?;
+    let attachments = list_client_attachments_inner(&conn, client_id)?;
+    let nutrition_calculations = list_client_nutrition_calculations_inner(&conn, client_id)?;
+    let diet_plans = list_client_diet_plans_inner(&conn, client_id)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, client_id, track_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE client_id=?1 ORDER BY visit_date ASC, visit_time ASC, id ASC"
+    ).map_err(|err| err.to_string())?;
+    let visits = stmt.query_map(params![client_id], row_to_visit)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    let mut measurements_by_visit: HashMap<i64, VisitMeasurements> = HashMap::new();
+    {
+        let mut measurements_stmt = conn.prepare(
+            "SELECT m.id, m.visit_id, m.weight_kg, m.height_cm, m.bmi_snapshot, m.body_fat_percent, m.muscle_mass, m.visceral_fat, m.waist_cm, m.abdomen_cm, m.hip_cm, m.chest_cm, m.arm_cm, m.thigh_cm, m.calf_cm, m.neck_cm, m.custom_measurements_json, m.notes, m.created_at, m.updated_at FROM visit_measurements m JOIN visits v ON v.id=m.visit_id WHERE v.client_id=?1"
+        ).map_err(|err| err.to_string())?;
+        for item in measurements_stmt.query_map(params![client_id], row_to_measurements).map_err(|err| err.to_string())? {
+            let measurement = item.map_err(|err| err.to_string())?;
+            if let Some(visit_id) = measurement.visit_id {
+                measurements_by_visit.insert(visit_id, measurement);
+            }
+        }
+    }
+
+    let mut services_by_visit: HashMap<i64, Vec<VisitService>> = HashMap::new();
+    {
+        let mut services_stmt = conn.prepare(
+            "SELECT s.id, s.visit_id, s.service_id, s.service_name_snapshot, s.service_group_snapshot, s.body_area, s.device_name, s.duration_minutes, s.price, s.quantity, s.total, s.notes FROM visit_services s JOIN visits v ON v.id=s.visit_id WHERE v.client_id=?1 ORDER BY s.id ASC"
+        ).map_err(|err| err.to_string())?;
+        for item in services_stmt.query_map(params![client_id], row_to_visit_service).map_err(|err| err.to_string())? {
+            let service = item.map_err(|err| err.to_string())?;
+            services_by_visit.entry(service.visit_id).or_default().push(service);
+        }
+    }
+
+    let mut values_by_visit: HashMap<i64, Vec<MeasurementValue>> = HashMap::new();
+    {
+        let mut values_stmt = conn.prepare(
+            "SELECT mv.id, mv.visit_id, mv.metric_key, mv.side, mv.value, mv.unit, mv.created_at, mv.updated_at FROM measurement_values mv JOIN visits v ON v.id=mv.visit_id WHERE v.client_id=?1 ORDER BY mv.visit_id, mv.metric_key, mv.side"
+        ).map_err(|err| err.to_string())?;
+        for item in values_stmt.query_map(params![client_id], row_to_measurement_value).map_err(|err| err.to_string())? {
+            let value = item.map_err(|err| err.to_string())?;
+            values_by_visit.entry(value.visit_id).or_default().push(value);
+        }
+    }
+
+    let mut bundles = Vec::with_capacity(visits.len());
+    for visit in visits {
+        let visit_id = visit.id.ok_or_else(|| "شناسه ویزیت معتبر نیست.".to_string())?;
+        bundles.push(VisitBundle {
+            measurements: measurements_by_visit.remove(&visit_id),
+            services: services_by_visit.remove(&visit_id).unwrap_or_default(),
+            measurement_values: values_by_visit.remove(&visit_id).unwrap_or_default(),
+            visit,
+        });
+    }
+
+    Ok(ClientProfileBundle { client, care_tracks, visits: bundles, attachments, nutrition_calculations, diet_plans })
 }
 
 fn report_table_row(label: &str, value: String) -> String {
@@ -2094,7 +2519,7 @@ fn build_client_report_html(conn: &Connection, client: &Client) -> Result<String
     let client_id = client.id.ok_or_else(|| "شناسه مراجع معتبر نیست.".to_string())?;
     let visits = {
         let mut stmt = conn
-            .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
+            .prepare("SELECT id, client_id, track_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
             .map_err(|err| err.to_string())?;
         let rows = stmt
             .query_map(params![client_id], row_to_visit)
@@ -2244,7 +2669,7 @@ h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside
 <body>
 <div class="toolbar"><div><strong>پیش‌نمایش پرونده</strong><small> برای PDF تمیز، گزینه Headers and footers چاپ را خاموش کنید.</small></div><button onclick="window.print()">چاپ / ذخیره PDF</button></div>
 <main class="page">
-<header class="cover"><img class="report-logo" src="{{LOGO_SRC}}" alt="Dietoy"><div class="brand">{{CLINIC}} {{DIETITIAN}}</div><h1>{{CLIENT_NAME}}</h1><p>پرونده یکپارچه تغذیه، اندازه‌گیری و خدمات</p><div class="summary"><div><span>هدف</span><strong>{{GOAL}}</strong></div><div><span>وزن فعلی</span><strong>{{WEIGHT}} kg</strong></div><div><span>تعداد ویزیت</span><strong>{{VISIT_COUNT}}</strong></div><div><span>آخرین ویزیت</span><strong><time data-date="{{LAST_VISIT}}">{{LAST_VISIT_FALLBACK}}</time></strong></div></div></header>
+<header class="cover"><img class="report-logo" src="{{LOGO_SRC}}" alt="Dietory"><div class="brand">{{CLINIC}} {{DIETITIAN}}</div><h1>{{CLIENT_NAME}}</h1><p>پرونده یکپارچه تغذیه، اندازه‌گیری و خدمات</p><div class="summary"><div><span>هدف</span><strong>{{GOAL}}</strong></div><div><span>وزن فعلی</span><strong>{{WEIGHT}} kg</strong></div><div><span>تعداد ویزیت</span><strong>{{VISIT_COUNT}}</strong></div><div><span>آخرین ویزیت</span><strong><time data-date="{{LAST_VISIT}}">{{LAST_VISIT_FALLBACK}}</time></strong></div></div></header>
 <div class="content">
 <section class="section"><div class="section-title"><h2>مسیرهای مراقبت</h2><span>نمای کلی پرونده</span></div><div class="tags">{{TRACKS}}</div></section>
 <section class="section"><div class="section-title"><h2>اطلاعات پایه</h2><span>آخرین اطلاعات ثبت‌شده</span></div><div class="table-wrap"><table><tbody>{{BASE_ROWS}}</tbody></table></div></section>
@@ -2252,7 +2677,7 @@ h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside
 <section class="section"><div class="section-title"><h2>ویزیت‌ها، اندازه‌گیری‌ها و خدمات</h2><span>تاریخچه کامل پرونده</span></div>{{VISIT_CARDS}}</section>
 <section class="section"><div class="section-title"><h2>فایل‌های پرونده</h2><span>بدون نمایش مسیر داخلی سیستم</span></div><div class="files">{{ATTACHMENTS}}</div></section>
 <section class="section"><div class="section-title"><h2>یادداشت پرونده</h2><span>یادداشت عمومی</span></div><div class="client-note">{{CLIENT_NOTES}}</div></section>
-</div><footer>ساخته‌شده توسط Dietoy · <time data-date="{{GENERATED_AT}}">{{GENERATED_AT}}</time></footer>
+</div><footer>ساخته‌شده توسط Dietory · <time data-date="{{GENERATED_AT}}">{{GENERATED_AT}}</time></footer>
 </main>
 <script>document.querySelectorAll('time[data-date]').forEach(function(el){var raw=el.getAttribute('data-date');if(!raw)return;var d=new Date(raw+'T00:00:00');if(isNaN(d.getTime()))return;el.textContent=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{year:'numeric',month:'long',day:'numeric'}).format(d);});</script>
 </body></html>"#;
@@ -2260,7 +2685,7 @@ h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside
     Ok(template
         .replace("{{LOGO_SRC}}", &report_logo_src)
         .replace("{{CLIENT_NAME}}", &escape_html(&client.full_name))
-        .replace("{{CLINIC}}", &escape_html(non_empty(&clinic_name, "Dietoy")))
+        .replace("{{CLINIC}}", &escape_html(non_empty(&clinic_name, "Dietory")))
         .replace("{{DIETITIAN}}", &escape_html(&dietitian_name))
         .replace("{{GOAL}}", goal_label(&client.goal))
         .replace("{{WEIGHT}}", &number(client.weight_kg, 1))
@@ -2289,7 +2714,7 @@ fn export_client_report_inner(state: &AppState, client_id: i64) -> Result<String
     let report_dir = client_folder(state, client_id)?.join("reports");
     fs::create_dir_all(&report_dir).map_err(|err| format!("ساخت پوشه گزارش انجام نشد: {err}"))?;
     let safe_date = Utc::now().format("%Y%m%d-%H%M%S").to_string();
-    let path = report_dir.join(format!("dietoy-client-{client_id:06}-{safe_date}.html"));
+    let path = report_dir.join(format!("dietory-client-{client_id:06}-{safe_date}.html"));
     fs::write(&path, html).map_err(|err| format!("ذخیره پرونده چاپی انجام نشد: {err}"))?;
     Ok(path.to_string_lossy().to_string())
 }
@@ -2322,7 +2747,7 @@ fn export_client_backup(state: tauri::State<'_, AppState>, client_id: i64) -> Re
         "visits": visits,
         "exported_at": now(),
     });
-    let file_name = format!("dietoy-client-{client_id}-{}.json", Utc::now().format("%Y%m%d-%H%M%S"));
+    let file_name = format!("dietory-client-{client_id}-{}.json", Utc::now().format("%Y%m%d-%H%M%S"));
     let target = dirs_next::document_dir()
         .or_else(dirs_next::desktop_dir)
         .ok_or_else(|| "مسیر مناسب برای خروجی پیدا نشد.".to_string())?
@@ -2616,6 +3041,100 @@ fn change_credentials(state: tauri::State<'_, AppState>, input: CredentialsInput
     Ok(())
 }
 
+fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> {
+    if !source.exists() { return Ok(()); }
+    fs::create_dir_all(target).map_err(|err| format!("ساخت پوشه پشتیبان انجام نشد: {err}"))?;
+    for entry in fs::read_dir(source).map_err(|err| format!("خواندن پوشه انجام نشد: {err}"))? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_directory_recursive(&source_path, &target_path)?;
+        } else {
+            fs::copy(&source_path, &target_path).map_err(|err| format!("کپی فایل پشتیبان انجام نشد: {err}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn export_complete_backup_inner(state: &AppState) -> Result<String, String> {
+    let base_dir = dirs_next::document_dir()
+        .or_else(dirs_next::desktop_dir)
+        .ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?
+        .join("Dietory Backups");
+    fs::create_dir_all(&base_dir).map_err(|err| err.to_string())?;
+    let backup_dir = base_dir.join(format!("Dietory-Backup-{}", Utc::now().format("%Y%m%d-%H%M%S")));
+    fs::create_dir_all(&backup_dir).map_err(|err| err.to_string())?;
+
+    let db_target = backup_dir.join("nutritionist.sqlite");
+    {
+        let conn = state.conn.lock().map_err(|err| err.to_string())?;
+        let mut destination = Connection::open(&db_target).map_err(|err| err.to_string())?;
+        let backup = rusqlite::backup::Backup::new(&conn, &mut destination).map_err(|err| err.to_string())?;
+        backup.run_to_completion(5, StdDuration::from_millis(100), None).map_err(|err| err.to_string())?;
+    }
+
+    let app_dir = state.db_path.parent().ok_or_else(|| "پوشه داده‌های برنامه پیدا نشد.".to_string())?;
+    for folder in ["DietoyData", "assets"] {
+        let source = app_dir.join(folder);
+        if source.exists() { copy_directory_recursive(&source, &backup_dir.join(folder))?; }
+    }
+
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let client_count: i64 = conn.query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0)).unwrap_or(0);
+    let visit_count: i64 = conn.query_row("SELECT COUNT(*) FROM visits", [], |row| row.get(0)).unwrap_or(0);
+    let attachment_count: i64 = conn.query_row("SELECT COUNT(*) FROM attachments", [], |row| row.get(0)).unwrap_or(0);
+    drop(conn);
+    let manifest = serde_json::json!({
+        "app": "Dietory",
+        "version": env!("CARGO_PKG_VERSION"),
+        "created_at": now(),
+        "database": "nutritionist.sqlite",
+        "clients": client_count,
+        "visits": visit_count,
+        "attachments": attachment_count,
+        "restore_hint": "این پوشه را در بخش بازیابی کامل Dietory انتخاب کنید."
+    });
+    fs::write(backup_dir.join("manifest.json"), serde_json::to_string_pretty(&manifest).map_err(|err| err.to_string())?)
+        .map_err(|err| err.to_string())?;
+    Ok(backup_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn export_complete_backup(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    export_complete_backup_inner(state.inner())
+}
+
+#[tauri::command]
+fn restore_complete_backup(state: tauri::State<'_, AppState>, path: String) -> Result<String, String> {
+    let selected = PathBuf::from(path);
+    let backup_dir = if selected.is_dir() { selected } else { selected.parent().map(Path::to_path_buf).ok_or_else(|| "پوشه پشتیبان معتبر نیست.".to_string())? };
+    let source_db = backup_dir.join("nutritionist.sqlite");
+    let manifest = backup_dir.join("manifest.json");
+    if !source_db.exists() || !manifest.exists() { return Err("این پوشه یک پشتیبان کامل معتبر Dietory نیست.".to_string()); }
+
+    let safety_path = export_complete_backup_inner(state.inner())?;
+    {
+        let source = Connection::open(&source_db).map_err(|err| format!("بازکردن دیتابیس پشتیبان انجام نشد: {err}"))?;
+        let mut destination = state.conn.lock().map_err(|err| err.to_string())?;
+        let backup = rusqlite::backup::Backup::new(&source, &mut destination).map_err(|err| err.to_string())?;
+        backup.run_to_completion(5, StdDuration::from_millis(100), None).map_err(|err| err.to_string())?;
+        drop(backup);
+        init_db(&destination)?;
+    }
+
+    let app_dir = state.db_path.parent().ok_or_else(|| "پوشه داده‌های برنامه پیدا نشد.".to_string())?;
+    for folder in ["DietoyData", "assets"] {
+        let source = backup_dir.join(folder);
+        if source.exists() {
+            let target = app_dir.join(folder);
+            if target.exists() { fs::remove_dir_all(&target).map_err(|err| format!("پاک‌سازی فایل‌های قبلی انجام نشد: {err}"))?; }
+            copy_directory_recursive(&source, &target)?;
+        }
+    }
+    Ok(safety_path)
+}
+
 #[tauri::command]
 fn export_database(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let file_name = format!("nutritionist-backup-{}.sqlite", Utc::now().format("%Y%m%d-%H%M%S"));
@@ -2663,14 +3182,14 @@ fn export_data_backup(state: tauri::State<'_, AppState>) -> Result<String, Strin
         .map_err(|err| err.to_string())?;
 
     let backup = DataBackup {
-        app: "dietoy".to_string(),
+        app: "dietory".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         exported_at: now(),
         clients,
         records,
         settings,
     };
-    let file_name = format!("dietoy-data-{}.json", Utc::now().format("%Y%m%d-%H%M%S"));
+    let file_name = format!("dietory-data-{}.json", Utc::now().format("%Y%m%d-%H%M%S"));
     let base_dir = dirs_next::document_dir()
         .or_else(dirs_next::desktop_dir)
         .ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?;
@@ -2684,7 +3203,7 @@ fn export_data_backup(state: tauri::State<'_, AppState>) -> Result<String, Strin
 fn restore_data_backup(state: tauri::State<'_, AppState>, path: String) -> Result<(), String> {
     let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
     let backup: DataBackup = serde_json::from_str(&content).map_err(|err| err.to_string())?;
-    if backup.app != "dietoy" && backup.app != "matab-taghzieh" {
+    if backup.app != "dietory" && backup.app != "dietoy" && backup.app != "matab-taghzieh" {
         return Err("فایل پشتیبان مربوط به این برنامه نیست.".to_string());
     }
 
@@ -2775,8 +3294,10 @@ pub fn run() {
             export_client_backup,
             export_client_report,
             export_diet_plan,
+            export_complete_backup,
             export_data_backup,
             export_database,
+            get_client_profile_bundle,
             get_settings,
             get_visit_detail,
             import_brand_asset,
@@ -2784,6 +3305,7 @@ pub fn run() {
             import_visit_attachment,
             list_client_records,
             list_client_attachments,
+            list_client_care_tracks,
             list_client_diet_plans,
             list_client_nutrition_calculations,
             list_clients,
@@ -2794,9 +3316,12 @@ pub fn run() {
             login,
             open_attachment,
             open_client_folder,
+            read_attachment_preview,
+            restore_complete_backup,
             restore_data_backup,
             save_client,
             save_client_record,
+            save_care_track,
             save_diet_plan,
             save_nutrition_calculation,
             save_service_catalog_item,
