@@ -1,47 +1,30 @@
-# Dietoy Changelog
+# Dietory 5.0.0
 
-## v0.2.0 — Premium UI/UX Polish
+## پایداری داده
 
-This update keeps the existing Dietoy feature set but improves perceived quality, release traceability, and stable customer delivery.
+- فعال‌سازی foreign key، WAL، busy timeout و indexهای SQLite.
+- پشتیبان کامل شامل دیتابیس، فایل‌های مراجع و دارایی‌های برند.
+- بازیابی کامل همراه با ساخت پشتیبان ایمنی قبل از restore.
+- تفکیک صحیح حالت Loading، Empty و Error در پرونده و داشبورد.
 
-### Added
+## معماری پرونده
 
-- Premium UI polish styles for calm surfaces, refined hover lift, visible focus states, subtle surface animation, and result-card treatment.
-- Versioned installer artifact name: `dietoy-v0.2.0-release-usb`.
-- Update-branch build support in GitHub Actions, so installer packages can be built before merging into `main`.
-- Version history and release notes in README.
+- جدول واقعی مسیرهای مراقبت و اتصال ویزیت، فایل، محاسبات و برنامه غذایی به مسیر.
+- جدول استاندارد `measurement_values` برای اندازه‌های قابل توسعه و اعضای بدن.
+- بارگذاری یکپارچه پرونده با یک IPC و حذف درخواست‌های متعدد frontend.
+- اتصال خودکار محاسبات و برنامه غذایی به مسیر رژیم.
 
-### Changed
+## پیشرفت و بادی آنالیز
 
-- Frontend package version bumped to `0.2.0`.
-- Rust/Tauri package version bumped to `0.2.0`.
-- Tauri installer metadata bumped to `0.2.0`.
-- Customer package naming now clearly identifies the update version.
+- نمایش PDF بادی آنالیز داخل اپ با PDF.js.
+- نمایش تصویر با zoom، rotate و fullscreen.
+- نمودار روند وزن، BMI، دورها، ترکیب بدن و اندازه‌های موضعی.
+- بازه ۶ ویزیت، ۱۲ ویزیت و همه سوابق.
+- وزن هدف و خط مرجع نمودار.
 
-### Compatibility
+## تجربه کاربری
 
-- Existing SQLite data location is unchanged.
-- Existing backup/restore JSON workflow is unchanged.
-- Existing client records and settings should remain compatible.
-
-### Validation
-
-- Frontend build was checked locally with `npm run build` in the prepared update workspace.
-- Final Windows installer should be built through GitHub Actions workflow `USE THIS - Dietoy Final Installer`.
-
-### Customer package
-
-Download the GitHub Actions artifact:
-
-```text
-dietoy-v0.2.0-release-usb
-```
-
-Expected contents:
-
-```text
-Dietoy-Setup.exe
-INSTALL.vbs
-INSTALL-SILENT.vbs
-README-USB.txt
-```
+- موشن‌های هدفمند، skeleton و feedback واضح.
+- گیمیفیکیشن آرام و متناسب با فضای درمانی.
+- تنظیمات پشتیبان ساده و پیشرفته.
+- نام نمایشی و Installer یکپارچه با برند Dietory و نسخه 5.0.0.

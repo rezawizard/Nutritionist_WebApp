@@ -1,44 +1,28 @@
-# روش اعمال آپدیت Dietoy v4.7
+# اعمال آپدیت Dietory 5.0.0 در GitHub
 
-## فایل‌های جایگزینی
-محتوای ZIP را با حفظ مسیرها در شاخه `main` مخزن جایگزین کنید.
+## روش پیشنهادی
 
-مسیرهای اصلی:
-- `src/App.tsx`
-- `src/lib.ts`
-- `src/types.ts`
-- `src/styles.css`
-- `src-tauri/src/lib.rs`
-- `src-tauri/tauri.conf.json`
-- `src-tauri/icons/*`
-- `public/logo.png`
-- `public/logo-symbol.png`
-- `public/dietoy-brand.png`
-- `.github/workflows/windows-installer.yml`
-- `installer/README-USB.txt`
-- `docs/Dietoy_User_Guide_FA.pdf`
-- `docs/Dietoy_User_Guide_FA.docx`
+1. ZIP فایل‌های جایگزینی را Extract کنید.
+2. هر فایل را دقیقاً با همان مسیر داخل branch `main` آپلود و Replace کنید.
+3. فایل‌های ذکرشده در `DELETE_THESE_IF_PRESENT.txt` را در صورت وجود حذف کنید.
+4. بعد از پایان همه آپلودها وارد تب Actions شوید.
+5. workflow زیر را باز کنید:
 
-## اجرای Build
-1. وارد تب **Actions** شوید.
-2. workflow با نام **USE THIS - Dietoy Final Installer** را باز کنید.
-3. `Run workflow` را روی شاخه `main` اجرا کنید.
-4. در صورت سبزشدن، artifact زیر را دانلود کنید:
-   `dietoy-final-0.3.0-release-usb`
-5. داخل ZIP باید فقط یک EXE باشد:
-   `Dietoy-FINAL-0.3.0-Setup.exe`
-6. فایل `Dietoy-Guide-FA.pdf` نیز کنار Installer قرار دارد.
+```text
+USE THIS - Dietory 5.0.0 Final Installer
+```
 
-## تست ضروری پس از نصب
-- لوگو و آیکون جدید نمایش داده شود.
-- مراجع قبلی بدون حذف داده باز شود.
-- محاسبات برای یک مراجع ذخیره و در خلاصه/رژیم بازیابی شود.
-- یک ویزیت با سه خدمت مختلف ثبت شود.
-- شیوه حضوری/آنلاین قابل انتخاب باشد.
-- یک بادی آنالیز تصویر یا PDF بارگذاری و داخل مسیر نمایش داده شود.
-- برنامه غذایی ذخیره و با یک کلیک چاپ شود.
-- گزارش پرونده لوگو داشته و مسیر خام فایل را نشان ندهد.
-- راهنمای PDF داخل artifact وجود داشته باشد.
+6. `Run workflow` و سپس branch `main` را انتخاب کنید.
+7. پس از سبزشدن Run، artifact زیر را دانلود کنید:
 
-## نکته
-Frontend با `npm run build` تست شده است. کامپایل Rust و NSIS فقط بعد از اجرای GitHub Actions قطعی می‌شود.
+```text
+dietory-5.0.0-release
+```
+
+8. فایل زیر را نصب کنید:
+
+```text
+Dietory-5.0.0-Setup.exe
+```
+
+این workflow فقط دستی اجرا می‌شود؛ بنابراین هنگام Replace کردن چند فایل، Runهای تکراری ساخته نمی‌شوند.

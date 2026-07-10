@@ -1,17 +1,12 @@
-اگر این فایل‌های قدیمی هنوز داخل GitHub هستند، حذف شوند:
-
-BUILD_TRIGGER_UPDATE_CODEX_LOCAL_FINAL.txt
 src/buildMarker.ts
-src/tauriCommandCompat.ts
 src/clinicalUxGuard.ts
 src/deliveryPolish.ts
 src/pdfPreviewFix.ts
 src/persianDate.ts
 src/profile-polish.css
 src/profileTabs.ts
+src/tauriCommandCompat.ts
+BUILD_TRIGGER_UPDATE_CODEX_LOCAL_FINAL.txt
+.github/workflows/00-run-final-dietoy-030.yml
 .github/workflows/build-installer.yml
 .github/workflows/build-repo-installer.yml
-.github/workflows/00-run-final-dietoy-030.yml
-
-فایل اصلی workflow که باید باقی بماند:
-.github/workflows/windows-installer.yml

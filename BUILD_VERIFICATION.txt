@@ -1,14 +1,16 @@
-Dietoy v4.7 verification
+Dietory 5.0.0 verification
 
-Frontend TypeScript/Vite:
-- npm run build: PASSED
-
-Rust source syntax:
-- tree-sitter Rust parse: PASSED (no syntax errors)
+Frontend:
+- npm ci: PASS
+- npm run build (TypeScript + Vite): PASS
+- JSON configuration parse: PASS
+- Tauri handler command presence audit: PASS (44/44 functions found)
+- Legacy unused source files removed from clean source: PASS
 
 Not executed in this environment:
-- cargo build
-- Tauri/NSIS installer build
+- cargo check / cargo build
+- Tauri NSIS installer build
+- Windows installation/runtime test
 
-Final Rust/installer validation must be performed by GitHub Actions workflow:
-USE THIS - Dietoy Final Installer
+Required final validation:
+Run GitHub Actions workflow "USE THIS - Dietory 5.0.0 Final Installer" and inspect any Rust compiler output before customer delivery.
