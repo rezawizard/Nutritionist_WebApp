@@ -1,19 +1,16 @@
-name: USE THIS - Dietoy Final Installer
-run-name: USE THIS - Dietoy Final Installer · ${{ github.ref_name }} · ${{ github.sha }}
+name: USE THIS - Dietory 5.0.0 Final Installer
+run-name: USE THIS - Dietory 5.0.0 Final Installer · ${{ github.ref_name }} · ${{ github.sha }}
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - "codex/**"
-      - "update/**"
-    tags:
-      - "v*"
+
+concurrency:
+  group: dietory-windows-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Dietoy USB package
+    name: Build Dietory 5.0.0 customer package
     runs-on: windows-latest
 
     steps:
@@ -24,6 +21,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -38,7 +36,7 @@ jobs:
           Get-ChildItem installer -Force
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build frontend
         run: npm run build
@@ -57,26 +55,26 @@ jobs:
             if (Test-Path $bundleDir) { Get-ChildItem -Path $bundleDir -Recurse }
             throw "NSIS setup EXE was not found."
           }
-          Copy-Item $setup.FullName (Join-Path $releaseDir "Dietoy-FINAL-0.3.0-Setup.exe") -Force
+          Copy-Item $setup.FullName (Join-Path $releaseDir "Dietory-5.0.0-Setup.exe") -Force
           Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
           Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
           Copy-Item "installer\README-USB.txt" $releaseDir -Force
 
-          $guidePath = Join-Path $pwd "docs\Dietoy_User_Guide_FA.pdf"
+          $guidePath = Join-Path $pwd "docs\Dietory_User_Guide_FA.pdf"
           if (Test-Path $guidePath) {
-            Copy-Item $guidePath (Join-Path $releaseDir "Dietoy-Guide-FA.pdf") -Force
+            Copy-Item $guidePath (Join-Path $releaseDir "Dietory-Guide-FA.pdf") -Force
             Write-Host "Persian user guide added to the artifact."
           } else {
-            Write-Warning "docs\Dietoy_User_Guide_FA.pdf was not found. The installer artifact will be created without the guide PDF."
+            Write-Warning "docs\Dietory_User_Guide_FA.pdf was not found. The installer artifact will be created without the guide PDF."
           }
 
           "branch=${{ github.ref_name }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8
           "commit=${{ github.sha }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
-          "version=0.3.0" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
+          "version=5.0.0" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
           Get-ChildItem $releaseDir
 
       - name: Upload release-usb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dietoy-final-0.3.0-release-usb
+          name: dietory-5.0.0-release
           path: release-usb
