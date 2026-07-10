@@ -51,6 +51,8 @@ struct ClientRecord {
 struct Visit {
     id: Option<i64>,
     client_id: i64,
+    #[serde(default = "default_visit_type")]
+    visit_type: String,
     #[serde(default)]
     visit_date: String,
     #[serde(default)]
@@ -195,6 +197,10 @@ fn default_service_group() -> String {
     "other".to_string()
 }
 
+fn default_visit_type() -> String {
+    "initial".to_string()
+}
+
 #[derive(Debug, Serialize)]
 struct DashboardGoalCounts {
     lose: i64,
@@ -211,6 +217,7 @@ struct DashboardVisitSummary {
     visit_time: String,
     status: String,
     total_fee: f64,
+    visit_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -855,6 +862,7 @@ fn row_to_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visit> {
         total_fee: row.get(12)?,
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
+        visit_type: row.get(15)?,
     })
 }
 
@@ -895,7 +903,7 @@ fn get_measurements_for_visit(conn: &Connection, visit_id: i64) -> Result<Option
 
 fn get_visit(conn: &Connection, id: i64) -> Result<Visit, String> {
     conn.query_row(
-        "SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits WHERE id = ?1",
+        "SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type FROM visits WHERE id = ?1",
         params![id],
         row_to_visit,
     )
@@ -914,7 +922,7 @@ fn get_visit_detail_inner(conn: &Connection, id: i64) -> Result<VisitDetail, Str
 fn list_client_visits(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<VisitDetail>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
+        .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
         .map_err(|err| err.to_string())?;
     let visits = stmt
         .query_map(params![client_id], row_to_visit)
@@ -954,7 +962,7 @@ fn save_visit_with_measurements(
 
     let visit_id = if let Some(id) = visit.id {
         conn.execute(
-            "UPDATE visits SET visit_date=?1, visit_time=?2, status=?3, reason=?4, clinical_notes=?5, private_notes=?6, next_visit_enabled=?7, next_visit_date=?8, next_visit_time=?9, next_visit_status=?10, total_fee=?11, updated_at=?12 WHERE id=?13",
+            "UPDATE visits SET visit_date=?1, visit_time=?2, status=?3, reason=?4, clinical_notes=?5, private_notes=?6, next_visit_enabled=?7, next_visit_date=?8, next_visit_time=?9, next_visit_status=?10, total_fee=?11, visit_type=?12, updated_at=?13 WHERE id=?14",
             params![
                 visit.visit_date,
                 visit.visit_time,
@@ -967,6 +975,7 @@ fn save_visit_with_measurements(
                 if visit.next_visit_enabled { visit.next_visit_time } else { String::new() },
                 if visit.next_visit_enabled { visit.next_visit_status } else { String::new() },
                 visit.total_fee,
+                visit.visit_type,
                 timestamp,
                 id
             ],
@@ -975,7 +984,7 @@ fn save_visit_with_measurements(
         id
     } else {
         conn.execute(
-            "INSERT INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+            "INSERT INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, visit_type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
             params![
                 visit.client_id,
                 visit.visit_date,
@@ -989,6 +998,7 @@ fn save_visit_with_measurements(
                 if visit.next_visit_enabled { visit.next_visit_time } else { String::new() },
                 if visit.next_visit_enabled { visit.next_visit_status } else { String::new() },
                 visit.total_fee,
+                visit.visit_type,
                 timestamp
             ],
         )
@@ -1472,9 +1482,28 @@ fn visit_status_label(value: &str) -> &'static str {
 
 fn attachment_category_label(value: &str) -> &'static str {
     match value {
-        "body_analysis" => "آنالیز بدن",
+        "profile" => "عکس پروفایل",
+        "body_analysis" => "بادی آنالیز",
         "lab" => "آزمایش",
         "medical_report" => "گزارش پزشکی",
+        "diet_plan" => "برنامه غذایی",
+        "device" => "دستگاه",
+        "before_after" => "قبل و بعد",
+        "report" => "گزارش",
+        "other" => "سایر",
+        _ => "سایر",
+    }
+}
+
+fn service_group_label(value: &str) -> &'static str {
+    match value {
+        "diet" => "رژیم غذایی",
+        "consultation" => "مشاوره تغذیه",
+        "body_analysis" => "بادی آنالیز",
+        "device" => "دستگاه و خدمات موضعی",
+        "followup" => "پیگیری و کنترل",
+        "package" => "پکیج خدمات",
+        "report" => "گزارش و فایل",
         "other" => "سایر",
         _ => "سایر",
     }
@@ -1571,13 +1600,69 @@ fn report_table_row(label: &str, value: String) -> String {
     format!("<tr><th>{}</th><td>{}</td></tr>", escape_html(label), value)
 }
 
+fn optional_report_row(label: &str, value: Option<f64>, digits: usize, unit: &str) -> String {
+    value.map(|item| {
+        let rendered = if unit.is_empty() {
+            number(item, digits)
+        } else {
+            format!("{} <small>{}</small>", number(item, digits), escape_html(unit))
+        };
+        report_table_row(label, rendered)
+    }).unwrap_or_default()
+}
+
+fn extended_measurement_rows(value: Option<&str>) -> String {
+    let Some(value) = value.filter(|item| !item.trim().is_empty()) else { return String::new(); };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(value) else { return String::new(); };
+    let fields = [
+        ("body_water_percent", "آب بدن", "درصد"),
+        ("fat_mass_kg", "توده چربی", "کیلوگرم"),
+        ("muscle_percent", "درصد عضله", "درصد"),
+        ("metabolic_age", "سن متابولیک", "سال"),
+        ("device_score", "امتیاز دستگاه", ""),
+        ("upper_abdomen_cm", "بالای شکم", "سانتی‌متر"),
+        ("lower_abdomen_cm", "پایین شکم", "سانتی‌متر"),
+        ("upper_arm_left_cm", "بازوی چپ", "سانتی‌متر"),
+        ("upper_arm_right_cm", "بازوی راست", "سانتی‌متر"),
+        ("forearm_left_cm", "ساعد چپ", "سانتی‌متر"),
+        ("forearm_right_cm", "ساعد راست", "سانتی‌متر"),
+        ("wrist_left_cm", "مچ دست چپ", "سانتی‌متر"),
+        ("wrist_right_cm", "مچ دست راست", "سانتی‌متر"),
+        ("thigh_left_cm", "ران چپ", "سانتی‌متر"),
+        ("thigh_right_cm", "ران راست", "سانتی‌متر"),
+        ("calf_left_cm", "ساق چپ", "سانتی‌متر"),
+        ("calf_right_cm", "ساق راست", "سانتی‌متر"),
+        ("ankle_left_cm", "مچ پای چپ", "سانتی‌متر"),
+        ("ankle_right_cm", "مچ پای راست", "سانتی‌متر"),
+    ];
+    let mut rows = String::new();
+    for (key, label, unit) in fields {
+        if let Some(item) = json.get(key).and_then(|entry| entry.as_f64()) {
+            rows.push_str(&optional_report_row(label, Some(item), 1, unit));
+        }
+    }
+    rows
+}
+
+fn visit_type_label(value: &str) -> &'static str {
+    match value {
+        "initial" => "ویزیت اولیه",
+        "diet_followup" => "پیگیری رژیم",
+        "body_analysis" => "بادی آنالیز",
+        "device" => "جلسه دستگاه",
+        "consultation" => "مشاوره",
+        "combined" => "ویزیت ترکیبی",
+        _ => "ویزیت",
+    }
+}
+
 fn build_client_report_html(conn: &Connection, client: &Client) -> Result<String, String> {
     let clinic_name = read_setting(conn, "clinic_name").unwrap_or_default();
     let dietitian_name = read_setting(conn, "dietitian_name").unwrap_or_default();
     let client_id = client.id.ok_or_else(|| "شناسه مراجع معتبر نیست.".to_string())?;
     let visits = {
         let mut stmt = conn
-            .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
+            .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
             .map_err(|err| err.to_string())?;
         let rows = stmt
             .query_map(params![client_id], row_to_visit)
@@ -1592,203 +1677,176 @@ fn build_client_report_html(conn: &Connection, client: &Client) -> Result<String
     let carb_grams = (target * (carb_percent / 100.0)) / 4.0;
     let fat_grams = (target * (fat_percent / 100.0)) / 9.0;
 
-    let mut visit_cards = String::new();
+    let mut track_labels: Vec<&str> = Vec::new();
     for visit in &visits {
-        let measurements = if let Some(visit_id) = visit.id {
-            get_measurements_for_visit(conn, visit_id)?
-        } else {
-            None
+        let label = match visit.visit_type.as_str() {
+            "body_analysis" => "بادی آنالیز",
+            "device" => "دستگاه و لاغری موضعی",
+            "consultation" => "مشاوره",
+            "combined" => "مراقبت ترکیبی",
+            _ => "رژیم غذایی",
         };
-        let services = if let Some(visit_id) = visit.id {
-            list_visit_services_inner(conn, visit_id)?
-        } else {
-            Vec::new()
-        };
-        let services_total: f64 = services.iter().map(|item| item.total).sum();
-        let mut services_rows = String::new();
-        for service in &services {
-            services_rows.push_str(&format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                escape_html(&service.service_name_snapshot),
-                escape_html(non_empty(&service.body_area, "—")),
-                number(service.quantity, 1),
-                money(service.total),
-            ));
-        }
-        let services_table = if services.is_empty() {
-            "<p class=\"muted\">خدمتی برای این ویزیت ثبت نشده است.</p>".to_string()
-        } else {
-            format!("<table><thead><tr><th>خدمت</th><th>ناحیه</th><th>تعداد</th><th>مبلغ</th></tr></thead><tbody>{}</tbody></table>", services_rows)
-        };
-        let measurement_rows = if let Some(m) = measurements {
-            let bmi_snapshot = m.bmi_snapshot.unwrap_or_else(|| bmi_value(m.weight_kg, m.height_cm.unwrap_or(client.height_cm)));
-            format!(
-                "{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
-                report_table_row("وزن", format!("{} کیلوگرم", number(m.weight_kg, 1))),
-                report_table_row("قد", format!("{} سانتی‌متر", optional_number(m.height_cm, 1))),
-                report_table_row("BMI", number(bmi_snapshot, 1)),
-                report_table_row("درصد چربی", optional_number(m.body_fat_percent, 1)),
-                report_table_row("توده عضله", optional_number(m.muscle_mass, 1)),
-                report_table_row("چربی احشایی", optional_number(m.visceral_fat, 1)),
-                report_table_row("دور کمر", optional_number(m.waist_cm, 1)),
-                report_table_row("دور شکم", optional_number(m.abdomen_cm, 1)),
-                report_table_row("دور باسن", optional_number(m.hip_cm, 1)),
-                report_table_row("دور سینه", optional_number(m.chest_cm, 1)),
-                report_table_row("دور بازو", optional_number(m.arm_cm, 1)),
-                report_table_row("دور ران", optional_number(m.thigh_cm, 1)),
-                report_table_row("دور ساق", optional_number(m.calf_cm, 1)),
-                report_table_row("دور گردن", optional_number(m.neck_cm, 1)),
-            )
-        } else {
-            report_table_row("اندازه‌گیری", "ثبت نشده".to_string())
-        };
-        visit_cards.push_str(&format!(
-            r#"<section class="visit-card">
-  <h3>ویزیت: {date} {time}</h3>
-  <div class="pill-row"><span>{status}</span><span>مبلغ خدمات: {services_total} تومان</span><span>مراجعه بعدی: {next_date} {next_time}</span></div>
-  <table><tbody>{measurement_rows}</tbody></table>
-  <h4>خدمات</h4>{services_table}
-  <h4>یادداشت بالینی</h4><p>{clinical_notes}</p>
-</section>"#,
-            date = escape_html(non_empty(&visit.visit_date, "—")),
-            time = escape_html(non_empty(&visit.visit_time, "")),
-            status = visit_status_label(&visit.status),
-            services_total = money(if visit.total_fee > 0.0 { visit.total_fee } else { services_total }),
-            next_date = escape_html(non_empty(&visit.next_visit_date, "—")),
-            next_time = escape_html(non_empty(&visit.next_visit_time, "")),
-            measurement_rows = measurement_rows,
-            services_table = services_table,
-            clinical_notes = escape_html(non_empty(&visit.clinical_notes, "—")),
-        ));
+        if !track_labels.contains(&label) { track_labels.push(label); }
     }
-    if visit_cards.is_empty() {
-        visit_cards = "<p class=\"muted\">هنوز ویزیتی برای این مراجع ثبت نشده است.</p>".to_string();
-    }
+    if track_labels.is_empty() { track_labels.push("رژیم غذایی"); }
+    let tracks_html = track_labels.iter().map(|label| format!("<span class=\"tag\">{}</span>", escape_html(label))).collect::<Vec<_>>().join("");
 
-    let mut attachment_rows = String::new();
-    for attachment in attachments {
-        attachment_rows.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-            escape_html(non_empty(&attachment.title, non_empty(&attachment.file_name, "—"))),
-            attachment_category_label(&attachment.category),
-            escape_html(non_empty(&attachment.attachment_date, "—")),
-            escape_html(non_empty(&attachment.local_path, "—")),
+    let mut visit_cards = String::new();
+    for (index, visit) in visits.iter().enumerate() {
+        let measurements = if let Some(visit_id) = visit.id { get_measurements_for_visit(conn, visit_id)? } else { None };
+        let services = if let Some(visit_id) = visit.id { list_visit_services_inner(conn, visit_id)? } else { Vec::new() };
+        let mut measurement_rows = String::new();
+        if let Some(ref m) = measurements {
+            let bmi_snapshot = m.bmi_snapshot.unwrap_or_else(|| bmi_value(m.weight_kg, m.height_cm.unwrap_or(client.height_cm)));
+            measurement_rows.push_str(&report_table_row("وزن", format!("{} <small>کیلوگرم</small>", number(m.weight_kg, 1))));
+            measurement_rows.push_str(&optional_report_row("قد", m.height_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&report_table_row("BMI", number(bmi_snapshot, 1)));
+            measurement_rows.push_str(&optional_report_row("درصد چربی", m.body_fat_percent, 1, "درصد"));
+            measurement_rows.push_str(&optional_report_row("توده عضله", m.muscle_mass, 1, "کیلوگرم"));
+            measurement_rows.push_str(&optional_report_row("چربی احشایی", m.visceral_fat, 1, ""));
+            measurement_rows.push_str(&optional_report_row("دور کمر", m.waist_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&optional_report_row("دور شکم", m.abdomen_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&optional_report_row("دور باسن", m.hip_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&optional_report_row("دور سینه", m.chest_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&optional_report_row("دور بازو", m.arm_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&optional_report_row("دور ران", m.thigh_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&optional_report_row("دور ساق", m.calf_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&optional_report_row("دور گردن", m.neck_cm, 1, "سانتی‌متر"));
+            measurement_rows.push_str(&extended_measurement_rows(m.custom_measurements_json.as_deref()));
+        }
+        let measurement_html = if measurement_rows.is_empty() {
+            "<div class=\"empty\">اندازه‌گیری تکمیلی برای این ویزیت ثبت نشده است.</div>".to_string()
+        } else {
+            format!("<div class=\"table-wrap\"><table><tbody>{}</tbody></table></div>", measurement_rows)
+        };
+
+        let services_html = if services.is_empty() {
+            "<div class=\"empty\">خدمتی برای این ویزیت ثبت نشده است.</div>".to_string()
+        } else {
+            services.iter().map(|service| format!(
+                "<div class=\"service-line\"><div><strong>{}</strong><small>{}{}{}{}</small></div><b>{} تومان</b></div>",
+                escape_html(&service.service_name_snapshot),
+                escape_html(service_group_label(&service.service_group_snapshot)),
+                if service.body_area.is_empty() { "" } else { " · " },
+                escape_html(&service.body_area),
+                if service.device_name.is_empty() { "" } else { " · دستگاه" },
+                money(service.total),
+            )).collect::<Vec<_>>().join("")
+        };
+        let next_visit = if visit.next_visit_enabled && !visit.next_visit_date.is_empty() {
+            format!("<span>پیگیری بعدی: <time data-date=\"{}\">{}</time>{}</span>", escape_html(&visit.next_visit_date), escape_html(&visit.next_visit_date), if visit.next_visit_time.is_empty() { String::new() } else { format!(" · {}", escape_html(&visit.next_visit_time)) })
+        } else { "<span>پیگیری بعدی: ثبت نشده</span>".to_string() };
+        visit_cards.push_str(&format!(
+            "<article class=\"visit-card\"><div class=\"visit-head\"><div><span class=\"eyebrow\">جلسه {}</span><h3>{}</h3><p><time data-date=\"{}\">{}</time>{}</p></div><span class=\"status\">{}</span></div><div class=\"meta-row\"><span>{}</span>{}</div><div class=\"visit-grid\"><section><h4>اندازه‌گیری‌ها</h4>{}</section><section><h4>خدمات</h4>{}</section></div><section class=\"notes\"><h4>یادداشت بالینی</h4><p>{}</p></section></article>",
+            index + 1,
+            escape_html(visit_type_label(&visit.visit_type)),
+            escape_html(&visit.visit_date), escape_html(&visit.visit_date),
+            if visit.visit_time.is_empty() { String::new() } else { format!(" · {}", escape_html(&visit.visit_time)) },
+            escape_html(visit_status_label(&visit.status)),
+            if visit.reason.trim().is_empty() { "بدون دلیل مراجعه".to_string() } else { escape_html(&visit.reason) },
+            next_visit,
+            measurement_html,
+            services_html,
+            escape_html(non_empty(&visit.clinical_notes, "یادداشتی ثبت نشده است.")),
         ));
     }
-    let attachments_table = if attachment_rows.is_empty() {
-        "<p class=\"muted\">فایلی به پرونده وصل نشده است.</p>".to_string()
+    if visit_cards.is_empty() { visit_cards = "<div class=\"empty large\">هنوز ویزیتی برای این مراجع ثبت نشده است.</div>".to_string(); }
+
+    let attachments_html = if attachments.is_empty() {
+        "<div class=\"empty\">فایلی به پرونده وصل نشده است.</div>".to_string()
     } else {
-        format!("<table><thead><tr><th>عنوان</th><th>دسته</th><th>تاریخ</th><th>مسیر</th></tr></thead><tbody>{}</tbody></table>", attachment_rows)
+        attachments.iter().map(|attachment| format!(
+            "<div class=\"file-card\"><div class=\"file-icon\">▣</div><div><strong>{}</strong><span>{} · <time data-date=\"{}\">{}</time></span>{}</div></div>",
+            escape_html(non_empty(&attachment.title, non_empty(&attachment.file_name, "فایل پرونده"))),
+            escape_html(attachment_category_label(&attachment.category)),
+            escape_html(&attachment.attachment_date), escape_html(non_empty(&attachment.attachment_date, "—")),
+            if attachment.notes.trim().is_empty() { String::new() } else { format!("<p>{}</p>", escape_html(&attachment.notes)) },
+        )).collect::<Vec<_>>().join("")
     };
 
-    Ok(format!(r#"<!doctype html>
+    let latest_visit_date = visits.last().map(|visit| visit.visit_date.as_str()).unwrap_or("");
+    let base_rows = format!(
+        "{}{}{}{}{}{}{}{}{}{}",
+        report_table_row("نام و نام خانوادگی", escape_html(&client.full_name)),
+        report_table_row("جنسیت", gender_label(&client.gender).to_string()),
+        report_table_row("سن", format!("{} سال", client.age)),
+        report_table_row("قد", format!("{} سانتی‌متر", number(client.height_cm, 1))),
+        report_table_row("وزن فعلی", format!("{} کیلوگرم", number(client.weight_kg, 1))),
+        report_table_row("هدف", goal_label(&client.goal).to_string()),
+        report_table_row("سطح فعالیت", activity_label(&client.activity_level).to_string()),
+        report_table_row("شماره تماس", escape_html(non_empty(&client.phone, "—"))),
+        report_table_row("ایمیل", escape_html(non_empty(&client.email, "—"))),
+        report_table_row("وضعیت پرونده", if client.archived { "بایگانی" } else { "فعال" }.to_string()),
+    );
+    let macro_rows = format!(
+        "{}{}{}{}",
+        report_table_row("ضریب فعالیت", number(activity_factor, 2)),
+        report_table_row("پروتئین", format!("{}٪ · {} گرم", number(protein_percent, 0), number(protein_grams, 0))),
+        report_table_row("کربوهیدرات", format!("{}٪ · {} گرم", number(carb_percent, 0), number(carb_grams, 0))),
+        report_table_row("چربی", format!("{}٪ · {} گرم", number(fat_percent, 0), number(fat_grams, 0))),
+    );
+
+    let template = r#"<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <title>پرونده مراجع - {client_name}</title>
-  <style>
-    @page {{ size: A4; margin: 14mm; }}
-    * {{ box-sizing: border-box; }}
-    body {{ font-family: Vazirmatn, Tahoma, Arial, sans-serif; direction: rtl; color: #21362f; background: #f7f3ea; margin: 0; padding: 24px; line-height: 1.8; }}
-    .page {{ max-width: 960px; margin: 0 auto; background: #fff; border-radius: 24px; padding: 28px; box-shadow: 0 18px 48px rgba(15, 91, 70, 0.13); }}
-    header {{ border-bottom: 2px solid #e8ded0; padding-bottom: 18px; margin-bottom: 20px; }}
-    h1 {{ margin: 0 0 8px; font-size: 28px; color: #0f5b46; }}
-    h2 {{ margin: 28px 0 12px; font-size: 20px; color: #0f5b46; }}
-    h3 {{ margin: 0 0 10px; font-size: 17px; color: #193f35; }}
-    h4 {{ margin: 16px 0 8px; font-size: 14px; color: #426157; }}
-    .muted {{ color: #7a857e; }}
-    .grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }}
-    .metric-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
-    .metric {{ border: 1px solid #e8ded0; border-radius: 16px; padding: 12px; background: #fbfaf7; }}
-    .metric b {{ display: block; color: #0f5b46; font-size: 18px; }}
-    table {{ width: 100%; border-collapse: collapse; margin: 10px 0 14px; background: #fff; }}
-    th, td {{ border: 1px solid #eadfce; padding: 9px 10px; vertical-align: top; text-align: right; }}
-    th {{ width: 28%; background: #f5efe5; color: #38534b; }}
-    .visit-card {{ break-inside: avoid; border: 1px solid #e8ded0; border-radius: 18px; padding: 16px; margin: 14px 0; background: #fffdf8; }}
-    .pill-row {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }}
-    .pill-row span {{ border-radius: 999px; background: #e6f0ea; color: #0f5b46; padding: 4px 10px; font-size: 12px; }}
-    .note {{ white-space: pre-wrap; border: 1px dashed #d8cbb9; border-radius: 16px; padding: 12px; background: #fffaf1; }}
-    @media print {{ body {{ background: #fff; padding: 0; }} .page {{ box-shadow: none; border-radius: 0; padding: 0; }} }}
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>پرونده مراجع - {{CLIENT_NAME}}</title>
+<style>
+@page { size:A4; margin:12mm; }
+*{box-sizing:border-box} body{font-family:Vazirmatn,Tahoma,Arial,sans-serif;direction:rtl;color:#1f312b;background:#edf3f1;margin:0;line-height:1.8} button{font:inherit}
+.toolbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;background:#123f34;color:#fff}.toolbar button{border:0;border-radius:12px;padding:9px 18px;background:#fff;color:#123f34;font-weight:800;cursor:pointer}.toolbar small{opacity:.8}
+.page{max-width:980px;margin:24px auto;background:#fff;border-radius:28px;overflow:hidden;box-shadow:0 20px 60px rgba(21,67,55,.14)}
+.cover{position:relative;padding:34px;background:linear-gradient(135deg,#0d5d47,#164c40);color:#fff;overflow:hidden}.cover:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;background:rgba(255,255,255,.07);left:-70px;top:-120px}.brand{font-size:13px;opacity:.85}.cover h1{font-size:34px;margin:18px 0 4px}.cover p{margin:0;opacity:.9}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:26px;position:relative;z-index:1}.summary div{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);border-radius:16px;padding:12px}.summary span{display:block;font-size:11px;opacity:.8}.summary strong{font-size:18px}
+.content{padding:30px}.section{margin:0 0 30px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.section-title h2{font-size:21px;margin:0;color:#0d5d47}.section-title span{font-size:12px;color:#74817c}.tags{display:flex;flex-wrap:wrap;gap:8px}.tag,.status{display:inline-flex;border-radius:999px;background:#e6f2ed;color:#0d5d47;padding:5px 12px;font-size:12px;font-weight:800}
+.profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.table-wrap{border:1px solid #e5ebe8;border-radius:16px;overflow:hidden;background:#fff}table{width:100%;border-collapse:collapse}th,td{padding:10px 12px;border-bottom:1px solid #edf0ee;text-align:right;vertical-align:top}tr:last-child th,tr:last-child td{border-bottom:0}th{width:38%;background:#f7faf8;color:#466158}td small{color:#7a8983}
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{border:1px solid #dfe9e4;border-radius:18px;padding:15px;background:linear-gradient(180deg,#fff,#f7faf8)}.metric span{display:block;color:#6d7c76;font-size:12px}.metric b{display:block;margin-top:5px;color:#0d5d47;font-size:22px}.macro-table{margin-top:14px}
+.visit-card{border:1px solid #dfe8e4;border-radius:20px;padding:18px;margin:14px 0;background:#fff;break-inside:auto}.visit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.visit-head h3{font-size:19px;margin:2px 0;color:#183d33}.visit-head p{margin:0;color:#77847f;font-size:13px}.eyebrow{font-size:11px;color:#7d8b86}.meta-row{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.meta-row span{border-radius:10px;background:#f3f7f5;padding:6px 10px;font-size:12px;color:#52665f}.visit-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.visit-grid h4,.notes h4{margin:0 0 8px;color:#31564b;font-size:14px}.service-line{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #edf1ef;padding:9px 0}.service-line:last-child{border-bottom:0}.service-line small{display:block;color:#78857f}.service-line b{white-space:nowrap;color:#0d5d47}.notes{margin-top:14px;border:1px dashed #d9e3de;border-radius:14px;padding:12px;background:#fbfcfb}.notes p{margin:0;white-space:pre-wrap}.empty{border:1px dashed #d9e3de;border-radius:14px;padding:16px;text-align:center;color:#7a8782;background:#fafcfb}.empty.large{padding:30px}
+.files{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.file-card{display:flex;gap:12px;border:1px solid #e1e9e5;border-radius:16px;padding:12px;background:#fff}.file-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:#e7f2ed;color:#0d5d47}.file-card strong{display:block}.file-card span{display:block;color:#77847f;font-size:12px}.file-card p{margin:4px 0 0;font-size:12px}.client-note{white-space:pre-wrap;border-radius:16px;padding:16px;background:#f8faf9;border:1px dashed #d8e2dd}
+footer{padding:18px 30px;border-top:1px solid #edf0ee;color:#819089;font-size:11px;text-align:center}
+h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside:avoid}.visit-head{break-inside:avoid}
+@media(max-width:760px){.summary,.metric-grid{grid-template-columns:repeat(2,1fr)}.profile-grid,.visit-grid,.files{grid-template-columns:1fr}.content{padding:20px}.cover{padding:26px}.cover h1{font-size:27px}}
+@media print{body{background:#fff}.toolbar{display:none!important}.page{margin:0;max-width:none;border-radius:0;box-shadow:none}.cover{-webkit-print-color-adjust:exact;print-color-adjust:exact}.content{padding:22px}.section{margin-bottom:22px}.visit-card{break-inside:auto}.page-break-before{break-before:page}footer{display:none}}
+</style>
 </head>
 <body>
-  <main class="page">
-    <header>
-      <h1>پرونده مراجع</h1>
-      <p class="muted">{clinic_name} {dietitian_name} · تاریخ تولید: {generated_at}</p>
-    </header>
+<div class="toolbar"><div><strong>پیش‌نمایش پرونده</strong><small> برای PDF تمیز، گزینه Headers and footers چاپ را خاموش کنید.</small></div><button onclick="window.print()">چاپ / ذخیره PDF</button></div>
+<main class="page">
+<header class="cover"><div class="brand">{{CLINIC}} {{DIETITIAN}}</div><h1>{{CLIENT_NAME}}</h1><p>پرونده یکپارچه تغذیه، اندازه‌گیری و خدمات</p><div class="summary"><div><span>هدف</span><strong>{{GOAL}}</strong></div><div><span>وزن فعلی</span><strong>{{WEIGHT}} kg</strong></div><div><span>تعداد ویزیت</span><strong>{{VISIT_COUNT}}</strong></div><div><span>آخرین ویزیت</span><strong><time data-date="{{LAST_VISIT}}">{{LAST_VISIT_FALLBACK}}</time></strong></div></div></header>
+<div class="content">
+<section class="section"><div class="section-title"><h2>مسیرهای مراقبت</h2><span>نمای کلی پرونده</span></div><div class="tags">{{TRACKS}}</div></section>
+<section class="section"><div class="section-title"><h2>اطلاعات پایه</h2><span>آخرین اطلاعات ثبت‌شده</span></div><div class="table-wrap"><table><tbody>{{BASE_ROWS}}</tbody></table></div></section>
+<section class="section"><div class="section-title"><h2>محاسبات تغذیه</h2><span>بر اساس تنظیمات فعلی کلینیک</span></div><div class="metric-grid"><div class="metric"><span>BMI</span><b>{{BMI}}</b></div><div class="metric"><span>IBW</span><b>{{IBW}} kg</b></div><div class="metric"><span>ABW</span><b>{{ABW}} kg</b></div><div class="metric"><span>BMR</span><b>{{BMR}} kcal</b></div><div class="metric"><span>TEE</span><b>{{TEE}} kcal</b></div><div class="metric"><span>کالری هدف</span><b>{{TARGET}} kcal</b></div></div><div class="table-wrap macro-table"><table><tbody>{{MACRO_ROWS}}</tbody></table></div></section>
+<section class="section"><div class="section-title"><h2>ویزیت‌ها، اندازه‌گیری‌ها و خدمات</h2><span>تاریخچه کامل پرونده</span></div>{{VISIT_CARDS}}</section>
+<section class="section"><div class="section-title"><h2>فایل‌های پرونده</h2><span>بدون نمایش مسیر داخلی سیستم</span></div><div class="files">{{ATTACHMENTS}}</div></section>
+<section class="section"><div class="section-title"><h2>یادداشت پرونده</h2><span>یادداشت عمومی</span></div><div class="client-note">{{CLIENT_NOTES}}</div></section>
+</div><footer>ساخته‌شده توسط Dietoy · <time data-date="{{GENERATED_AT}}">{{GENERATED_AT}}</time></footer>
+</main>
+<script>document.querySelectorAll('time[data-date]').forEach(function(el){var raw=el.getAttribute('data-date');if(!raw)return;var d=new Date(raw+'T00:00:00');if(isNaN(d.getTime()))return;el.textContent=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{year:'numeric',month:'long',day:'numeric'}).format(d);});</script>
+</body></html>"#;
 
-    <h2>اطلاعات پایه</h2>
-    <div class="grid">
-      <table><tbody>
-        {base_rows_left}
-      </tbody></table>
-      <table><tbody>
-        {base_rows_right}
-      </tbody></table>
-    </div>
-
-    <h2>محاسبات تغذیه</h2>
-    <div class="metric-grid">
-      <div class="metric"><span>BMI</span><b>{bmi}</b></div>
-      <div class="metric"><span>IBW</span><b>{ibw} kg</b></div>
-      <div class="metric"><span>ABW</span><b>{abw} kg</b></div>
-      <div class="metric"><span>BMR</span><b>{bmr} kcal</b></div>
-      <div class="metric"><span>TEE</span><b>{tee} kcal</b></div>
-      <div class="metric"><span>هدف کالری</span><b>{target} kcal</b></div>
-    </div>
-    <table><tbody>
-      {macro_rows}
-    </tbody></table>
-
-    <h2>ویزیت‌ها و اندازه‌گیری‌ها</h2>
-    {visit_cards}
-
-    <h2>فایل‌های پیوست</h2>
-    {attachments_table}
-
-    <h2>یادداشت پرونده</h2>
-    <div class="note">{client_notes}</div>
-  </main>
-</body>
-</html>"#,
-        client_name = escape_html(&client.full_name),
-        clinic_name = escape_html(non_empty(&clinic_name, "")),
-        dietitian_name = escape_html(non_empty(&dietitian_name, "")),
-        generated_at = Utc::now().date_naive(),
-        base_rows_left = format!(
-            "{}{}{}{}{}",
-            report_table_row("نام", escape_html(&client.full_name)),
-            report_table_row("جنسیت", gender_label(&client.gender).to_string()),
-            report_table_row("سن", format!("{} سال", client.age)),
-            report_table_row("قد", format!("{} سانتی‌متر", number(client.height_cm, 1))),
-            report_table_row("وزن فعلی", format!("{} کیلوگرم", number(client.weight_kg, 1))),
-        ),
-        base_rows_right = format!(
-            "{}{}{}{}{}",
-            report_table_row("هدف", goal_label(&client.goal).to_string()),
-            report_table_row("سطح فعالیت", activity_label(&client.activity_level).to_string()),
-            report_table_row("شماره تماس", escape_html(non_empty(&client.phone, "—"))),
-            report_table_row("ایمیل", escape_html(non_empty(&client.email, "—"))),
-            report_table_row("وضعیت", if client.archived { "بایگانی" } else { "فعال" }.to_string()),
-        ),
-        bmi = number(bmi, 1),
-        ibw = number(ibw, 1),
-        abw = number(abw, 1),
-        bmr = number(bmr, 0),
-        tee = number(tee, 0),
-        target = number(target, 0),
-        macro_rows = format!(
-            "{}{}{}{}",
-            report_table_row("ضریب فعالیت", number(activity_factor, 2)),
-            report_table_row("پروتئین", format!("{}٪ / {} گرم", number(protein_percent, 0), number(protein_grams, 0))),
-            report_table_row("کربوهیدرات", format!("{}٪ / {} گرم", number(carb_percent, 0), number(carb_grams, 0))),
-            report_table_row("چربی", format!("{}٪ / {} گرم", number(fat_percent, 0), number(fat_grams, 0))),
-        ),
-        visit_cards = visit_cards,
-        attachments_table = attachments_table,
-        client_notes = escape_html(non_empty(&client.notes, "—")),
-    ))
+    Ok(template
+        .replace("{{CLIENT_NAME}}", &escape_html(&client.full_name))
+        .replace("{{CLINIC}}", &escape_html(non_empty(&clinic_name, "Dietoy")))
+        .replace("{{DIETITIAN}}", &escape_html(&dietitian_name))
+        .replace("{{GOAL}}", goal_label(&client.goal))
+        .replace("{{WEIGHT}}", &number(client.weight_kg, 1))
+        .replace("{{VISIT_COUNT}}", &visits.len().to_string())
+        .replace("{{LAST_VISIT}}", latest_visit_date)
+        .replace("{{LAST_VISIT_FALLBACK}}", if latest_visit_date.is_empty() { "ثبت نشده" } else { latest_visit_date })
+        .replace("{{TRACKS}}", &tracks_html)
+        .replace("{{BASE_ROWS}}", &base_rows)
+        .replace("{{BMI}}", &number(bmi, 1))
+        .replace("{{IBW}}", &number(ibw, 1))
+        .replace("{{ABW}}", &number(abw, 1))
+        .replace("{{BMR}}", &number(bmr, 0))
+        .replace("{{TEE}}", &number(tee, 0))
+        .replace("{{TARGET}}", &number(target, 0))
+        .replace("{{MACRO_ROWS}}", &macro_rows)
+        .replace("{{VISIT_CARDS}}", &visit_cards)
+        .replace("{{ATTACHMENTS}}", &attachments_html)
+        .replace("{{CLIENT_NOTES}}", &escape_html(non_empty(&client.notes, "یادداشتی ثبت نشده است.")))
+        .replace("{{GENERATED_AT}}", &Utc::now().date_naive().to_string()))
 }
 
 fn export_client_report_inner(state: &AppState, client_id: i64) -> Result<String, String> {
@@ -1861,6 +1919,7 @@ fn row_to_dashboard_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dashboard
         visit_time: row.get(4)?,
         status: row.get(5)?,
         total_fee: row.get(6)?,
+        visit_type: row.get(7)?,
     })
 }
 
@@ -1934,7 +1993,7 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
 
     let upcoming_visits = {
         let mut stmt = conn
-            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee FROM visits JOIN clients ON clients.id = visits.client_id WHERE visits.visit_date >= ?1 ORDER BY visits.visit_date ASC, visits.visit_time ASC LIMIT 6")
+            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee, visits.visit_type FROM visits JOIN clients ON clients.id = visits.client_id WHERE visits.visit_date >= ?1 ORDER BY visits.visit_date ASC, visits.visit_time ASC LIMIT 6")
             .map_err(|err| err.to_string())?;
         let items = stmt
             .query_map(params![today_iso], row_to_dashboard_visit)
@@ -1946,7 +2005,7 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
 
     let recent_visits = {
         let mut stmt = conn
-            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee FROM visits JOIN clients ON clients.id = visits.client_id ORDER BY visits.visit_date DESC, visits.visit_time DESC, visits.id DESC LIMIT 6")
+            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee, visits.visit_type FROM visits JOIN clients ON clients.id = visits.client_id ORDER BY visits.visit_date DESC, visits.visit_time DESC, visits.id DESC LIMIT 6")
             .map_err(|err| err.to_string())?;
         let items = stmt
             .query_map([], row_to_dashboard_visit)
