@@ -61,7 +61,15 @@ jobs:
           Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
           Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
           Copy-Item "installer\README-USB.txt" $releaseDir -Force
-          Copy-Item "docs\Dietoy_User_Guide_FA.pdf" (Join-Path $releaseDir "Dietoy-Guide-FA.pdf") -Force
+
+          $guidePath = Join-Path $pwd "docs\Dietoy_User_Guide_FA.pdf"
+          if (Test-Path $guidePath) {
+            Copy-Item $guidePath (Join-Path $releaseDir "Dietoy-Guide-FA.pdf") -Force
+            Write-Host "Persian user guide added to the artifact."
+          } else {
+            Write-Warning "docs\Dietoy_User_Guide_FA.pdf was not found. The installer artifact will be created without the guide PDF."
+          }
+
           "branch=${{ github.ref_name }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8
           "commit=${{ github.sha }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
           "version=0.3.0" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
