@@ -1,22 +1,22 @@
 Dietoy installer package
 
-Build on the developer machine:
-1. Install Node.js, Rust, Microsoft C++ Build Tools, and WebView2 requirements.
-2. If Microsoft C++ Build Tools is missing, run installer\Install-Windows-Build-Prerequisites.ps1 once as administrator.
-3. Right-click installer\Build-USB-Package.ps1 and run with PowerShell.
-4. Copy the generated release-usb folder to the flash drive. The package contains one installer EXE only: Dietoy-FINAL-0.3.0-Setup.exe.
-
 Customer install:
-1. Open the flash drive or copied folder.
-2. Double-click INSTALL.vbs.
-3. Follow the installer.
-4. Open Dietoy from the desktop icon.
+1. Open this folder.
+2. Double-click Dietoy-FINAL-0.3.0-Setup.exe.
+3. Follow the installer and open Dietoy from the desktop icon.
+4. Read Dietoy-Guide-FA.pdf for the complete Persian training guide.
 
-Silent install:
-Double-click INSTALL-SILENT.vbs.
+Optional safety installer:
+- INSTALL.vbs creates a pre-install backup when previous data exists.
+- INSTALL-SILENT.vbs runs the installer silently.
 
-Default app login:
+Default login:
 Username: admin
 Password: admin
 
-After login, open Settings and change the username/password before real use.
+Important:
+After the first login, change the username/password in Settings.
+Before every update, create a SQLite backup and keep a copy of the DietoyData folder.
+
+This package contains one installer EXE only:
+Dietoy-FINAL-0.3.0-Setup.exe
