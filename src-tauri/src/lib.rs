@@ -53,6 +53,10 @@ struct Visit {
     client_id: i64,
     #[serde(default = "default_visit_type")]
     visit_type: String,
+    #[serde(default = "default_visit_mode_key")]
+    visit_mode_key: String,
+    #[serde(default = "default_visit_mode_name")]
+    visit_mode_name_snapshot: String,
     #[serde(default)]
     visit_date: String,
     #[serde(default)]
@@ -189,6 +193,79 @@ struct ServiceCatalogItem {
     description: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct VisitModeOption {
+    id: Option<i64>,
+    key: String,
+    name: String,
+    #[serde(default = "default_active_service")]
+    active: bool,
+    #[serde(default)]
+    description: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct NutritionCalculation {
+    id: Option<i64>,
+    client_id: i64,
+    #[serde(default)]
+    visit_id: Option<i64>,
+    calculated_at: String,
+    gender: String,
+    age: i64,
+    height_cm: f64,
+    weight_kg: f64,
+    activity_level: String,
+    goal: String,
+    bmi: f64,
+    ibw: f64,
+    abw: f64,
+    bmr: f64,
+    tee: f64,
+    target_calories: f64,
+    #[serde(default)]
+    calorie_adjustment_percent: f64,
+    protein_percent: f64,
+    carb_percent: f64,
+    fat_percent: f64,
+    protein_g: f64,
+    carb_g: f64,
+    fat_g: f64,
+    #[serde(default)]
+    notes: String,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct DietPlan {
+    id: Option<i64>,
+    client_id: i64,
+    #[serde(default)]
+    visit_id: Option<i64>,
+    #[serde(default)]
+    calculation_id: Option<i64>,
+    title: String,
+    plan_date: String,
+    #[serde(default = "default_diet_plan_status")]
+    status: String,
+    calories_target: f64,
+    protein_target_g: f64,
+    carb_target_g: f64,
+    fat_target_g: f64,
+    meals_json: String,
+    #[serde(default)]
+    hydration_text: String,
+    #[serde(default)]
+    activity_text: String,
+    #[serde(default)]
+    guidance_text: String,
+    #[serde(default)]
+    notes: String,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
 fn default_active_service() -> bool {
     true
 }
@@ -199,6 +276,18 @@ fn default_service_group() -> String {
 
 fn default_visit_type() -> String {
     "initial".to_string()
+}
+
+fn default_visit_mode_key() -> String {
+    "in_person".to_string()
+}
+
+fn default_visit_mode_name() -> String {
+    "حضوری".to_string()
+}
+
+fn default_diet_plan_status() -> String {
+    "draft".to_string()
 }
 
 #[derive(Debug, Serialize)]
@@ -263,6 +352,13 @@ struct Settings {
     macro_protein_percent: f64,
     macro_carb_percent: f64,
     macro_fat_percent: f64,
+    diet_plan_header_title: String,
+    diet_plan_footer_text: String,
+    diet_plan_margin_mm: f64,
+    diet_plan_show_logo: bool,
+    diet_plan_show_macros: bool,
+    diet_plan_show_calories: bool,
+    report_show_contact: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -566,6 +662,70 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             active INTEGER NOT NULL DEFAULT 1,
             description TEXT NOT NULL DEFAULT ''
         );
+
+
+        CREATE TABLE IF NOT EXISTS visit_modes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            description TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS nutrition_calculations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            visit_id INTEGER,
+            calculated_at TEXT NOT NULL,
+            gender TEXT NOT NULL,
+            age INTEGER NOT NULL,
+            height_cm REAL NOT NULL,
+            weight_kg REAL NOT NULL,
+            activity_level TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            bmi REAL NOT NULL,
+            ibw REAL NOT NULL,
+            abw REAL NOT NULL,
+            bmr REAL NOT NULL,
+            tee REAL NOT NULL,
+            target_calories REAL NOT NULL,
+            calorie_adjustment_percent REAL NOT NULL DEFAULT 0,
+            protein_percent REAL NOT NULL,
+            carb_percent REAL NOT NULL,
+            fat_percent REAL NOT NULL,
+            protein_g REAL NOT NULL,
+            carb_g REAL NOT NULL,
+            fat_g REAL NOT NULL,
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS diet_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            visit_id INTEGER,
+            calculation_id INTEGER,
+            title TEXT NOT NULL,
+            plan_date TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            calories_target REAL NOT NULL DEFAULT 0,
+            protein_target_g REAL NOT NULL DEFAULT 0,
+            carb_target_g REAL NOT NULL DEFAULT 0,
+            fat_target_g REAL NOT NULL DEFAULT 0,
+            meals_json TEXT NOT NULL DEFAULT '[]',
+            hydration_text TEXT NOT NULL DEFAULT '',
+            activity_text TEXT NOT NULL DEFAULT '',
+            guidance_text TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(client_id) REFERENCES clients(id) ON DELETE CASCADE,
+            FOREIGN KEY(visit_id) REFERENCES visits(id) ON DELETE SET NULL,
+            FOREIGN KEY(calculation_id) REFERENCES nutrition_calculations(id) ON DELETE SET NULL
+        );
         ",
     )
     .map_err(|err| err.to_string())?;
@@ -574,6 +734,8 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "service_catalog", "description", "description TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "visit_services", "service_group_snapshot", "service_group_snapshot TEXT NOT NULL DEFAULT 'other'")?;
     ensure_column(conn, "visits", "visit_type", "visit_type TEXT NOT NULL DEFAULT 'initial'")?;
+    ensure_column(conn, "visits", "visit_mode_key", "visit_mode_key TEXT NOT NULL DEFAULT 'in_person'")?;
+    ensure_column(conn, "visits", "visit_mode_name_snapshot", "visit_mode_name_snapshot TEXT NOT NULL DEFAULT 'حضوری'")?;
 
     let service_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM service_catalog", [], |row| row.get(0))
@@ -596,6 +758,22 @@ fn init_db(conn: &Connection) -> Result<(), String> {
         }
     }
 
+    let visit_mode_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM visit_modes", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    if visit_mode_count == 0 {
+        for (key, name, description) in [
+            ("in_person", "حضوری", "ویزیت در کلینیک"),
+            ("online", "آنلاین", "ویزیت غیرحضوری یا تماس تصویری"),
+        ] {
+            conn.execute(
+                "INSERT INTO visit_modes (key, name, active, description) VALUES (?1, ?2, 1, ?3)",
+                params![key, name, description],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+    }
+
     ensure_column(conn, "clients", "phone", "phone TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "clients", "email", "email TEXT NOT NULL DEFAULT ''")?;
     ensure_column(
@@ -609,15 +787,22 @@ fn init_db(conn: &Connection) -> Result<(), String> {
 
     write_default_setting(conn, "dietitian_name", "")?;
     write_default_setting(conn, "clinic_name", "")?;
-    write_default_setting(conn, "primary_color", "#0f5b46")?;
-    write_default_setting(conn, "background_color", "#10517A")?;
-    write_default_setting(conn, "text_color", "#f7f3ea")?;
+    write_default_setting(conn, "primary_color", "#31A69D")?;
+    write_default_setting(conn, "background_color", "#0F5079")?;
+    write_default_setting(conn, "text_color", "#F5FBF9")?;
     write_default_setting(conn, "logo_path", "")?;
     write_default_setting(conn, "background_image_path", "")?;
     write_default_setting(conn, "username", "admin")?;
     for (key, value) in CALCULATION_DEFAULT_SETTINGS {
         write_default_setting(conn, key, value)?;
     }
+    write_default_setting(conn, "diet_plan_header_title", "برنامه غذایی اختصاصی")?;
+    write_default_setting(conn, "diet_plan_footer_text", "این برنامه بر اساس شرایط فردی مراجع تنظیم شده است.")?;
+    write_default_setting(conn, "diet_plan_margin_mm", "14")?;
+    write_default_setting(conn, "diet_plan_show_logo", "1")?;
+    write_default_setting(conn, "diet_plan_show_macros", "1")?;
+    write_default_setting(conn, "diet_plan_show_calories", "1")?;
+    write_default_setting(conn, "report_show_contact", "1")?;
     write_default_setting(conn, "password_hash", &hash_password("admin"))?;
     Ok(())
 }
@@ -863,6 +1048,8 @@ fn row_to_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visit> {
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
         visit_type: row.get(15)?,
+        visit_mode_key: row.get(16)?,
+        visit_mode_name_snapshot: row.get(17)?,
     })
 }
 
@@ -903,7 +1090,7 @@ fn get_measurements_for_visit(conn: &Connection, visit_id: i64) -> Result<Option
 
 fn get_visit(conn: &Connection, id: i64) -> Result<Visit, String> {
     conn.query_row(
-        "SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type FROM visits WHERE id = ?1",
+        "SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE id = ?1",
         params![id],
         row_to_visit,
     )
@@ -922,7 +1109,7 @@ fn get_visit_detail_inner(conn: &Connection, id: i64) -> Result<VisitDetail, Str
 fn list_client_visits(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<VisitDetail>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
+        .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
         .map_err(|err| err.to_string())?;
     let visits = stmt
         .query_map(params![client_id], row_to_visit)
@@ -962,7 +1149,7 @@ fn save_visit_with_measurements(
 
     let visit_id = if let Some(id) = visit.id {
         conn.execute(
-            "UPDATE visits SET visit_date=?1, visit_time=?2, status=?3, reason=?4, clinical_notes=?5, private_notes=?6, next_visit_enabled=?7, next_visit_date=?8, next_visit_time=?9, next_visit_status=?10, total_fee=?11, visit_type=?12, updated_at=?13 WHERE id=?14",
+            "UPDATE visits SET visit_date=?1, visit_time=?2, status=?3, reason=?4, clinical_notes=?5, private_notes=?6, next_visit_enabled=?7, next_visit_date=?8, next_visit_time=?9, next_visit_status=?10, total_fee=?11, visit_type=?12, visit_mode_key=?13, visit_mode_name_snapshot=?14, updated_at=?15 WHERE id=?16",
             params![
                 visit.visit_date,
                 visit.visit_time,
@@ -976,6 +1163,8 @@ fn save_visit_with_measurements(
                 if visit.next_visit_enabled { visit.next_visit_status } else { String::new() },
                 visit.total_fee,
                 visit.visit_type,
+                visit.visit_mode_key,
+                visit.visit_mode_name_snapshot,
                 timestamp,
                 id
             ],
@@ -984,7 +1173,7 @@ fn save_visit_with_measurements(
         id
     } else {
         conn.execute(
-            "INSERT INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, visit_type, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+            "INSERT INTO visits (client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, visit_type, visit_mode_key, visit_mode_name_snapshot, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
             params![
                 visit.client_id,
                 visit.visit_date,
@@ -999,6 +1188,8 @@ fn save_visit_with_measurements(
                 if visit.next_visit_enabled { visit.next_visit_status } else { String::new() },
                 visit.total_fee,
                 visit.visit_type,
+                visit.visit_mode_key,
+                visit.visit_mode_name_snapshot,
                 timestamp
             ],
         )
@@ -1229,6 +1420,213 @@ fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Resu
     Ok(items)
 }
 
+
+#[tauri::command]
+fn delete_visit_service(state: tauri::State<'_, AppState>, id: i64) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let affected = conn.execute("DELETE FROM visit_services WHERE id=?1", params![id]).map_err(|err| err.to_string())?;
+    if affected == 0 { return Err("خدمت ویزیت پیدا نشد.".to_string()); }
+    Ok(())
+}
+
+fn row_to_visit_mode(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitModeOption> {
+    Ok(VisitModeOption {
+        id: row.get(0)?,
+        key: row.get(1)?,
+        name: row.get(2)?,
+        active: row.get::<_, i64>(3)? == 1,
+        description: row.get(4)?,
+    })
+}
+
+#[tauri::command]
+fn list_visit_modes(state: tauri::State<'_, AppState>, active_only: Option<bool>) -> Result<Vec<VisitModeOption>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let sql = if active_only.unwrap_or(false) {
+        "SELECT id, key, name, active, description FROM visit_modes WHERE active=1 ORDER BY id ASC"
+    } else {
+        "SELECT id, key, name, active, description FROM visit_modes ORDER BY id ASC"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
+    let items = stmt.query_map([], row_to_visit_mode).map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+#[tauri::command]
+fn save_visit_mode(state: tauri::State<'_, AppState>, mut item: VisitModeOption) -> Result<VisitModeOption, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    item.name = item.name.trim().to_string();
+    if item.name.is_empty() { return Err("نام شیوه ویزیت الزامی است.".to_string()); }
+    let key = if item.key.trim().is_empty() {
+        format!("custom_{}", Utc::now().timestamp_millis())
+    } else { item.key.trim().to_lowercase().replace(' ', "_") };
+    let id = if let Some(id) = item.id {
+        let affected = conn.execute(
+            "UPDATE visit_modes SET key=?1, name=?2, active=?3, description=?4 WHERE id=?5",
+            params![key, item.name, if item.active {1} else {0}, item.description, id],
+        ).map_err(|err| err.to_string())?;
+        if affected == 0 { return Err("شیوه ویزیت پیدا نشد.".to_string()); }
+        id
+    } else {
+        conn.execute(
+            "INSERT INTO visit_modes (key, name, active, description) VALUES (?1, ?2, ?3, ?4)",
+            params![key, item.name, if item.active {1} else {0}, item.description],
+        ).map_err(|err| format!("ذخیره شیوه ویزیت انجام نشد: {err}"))?;
+        conn.last_insert_rowid()
+    };
+    conn.query_row("SELECT id, key, name, active, description FROM visit_modes WHERE id=?1", params![id], row_to_visit_mode)
+        .map_err(|err| err.to_string())
+}
+
+fn row_to_nutrition_calculation(row: &rusqlite::Row<'_>) -> rusqlite::Result<NutritionCalculation> {
+    Ok(NutritionCalculation {
+        id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, calculated_at: row.get(3)?,
+        gender: row.get(4)?, age: row.get(5)?, height_cm: row.get(6)?, weight_kg: row.get(7)?,
+        activity_level: row.get(8)?, goal: row.get(9)?, bmi: row.get(10)?, ibw: row.get(11)?,
+        abw: row.get(12)?, bmr: row.get(13)?, tee: row.get(14)?, target_calories: row.get(15)?,
+        calorie_adjustment_percent: row.get(16)?, protein_percent: row.get(17)?, carb_percent: row.get(18)?,
+        fat_percent: row.get(19)?, protein_g: row.get(20)?, carb_g: row.get(21)?, fat_g: row.get(22)?,
+        notes: row.get(23)?, created_at: row.get(24)?, updated_at: row.get(25)?,
+    })
+}
+
+const NUTRITION_CALC_SELECT: &str = "SELECT id, client_id, visit_id, calculated_at, gender, age, height_cm, weight_kg, activity_level, goal, bmi, ibw, abw, bmr, tee, target_calories, calorie_adjustment_percent, protein_percent, carb_percent, fat_percent, protein_g, carb_g, fat_g, notes, created_at, updated_at FROM nutrition_calculations";
+
+#[tauri::command]
+fn list_client_nutrition_calculations(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<NutritionCalculation>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let mut stmt = conn.prepare(&format!("{} WHERE client_id=?1 ORDER BY calculated_at DESC, id DESC", NUTRITION_CALC_SELECT)).map_err(|err| err.to_string())?;
+    let items = stmt.query_map(params![client_id], row_to_nutrition_calculation).map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+#[tauri::command]
+fn save_nutrition_calculation(state: tauri::State<'_, AppState>, item: NutritionCalculation) -> Result<NutritionCalculation, String> {
+    if item.client_id <= 0 { return Err("ابتدا یک مراجع را انتخاب کنید.".to_string()); }
+    if item.target_calories <= 0.0 { return Err("کالری هدف معتبر نیست.".to_string()); }
+    let total_percent = item.protein_percent + item.carb_percent + item.fat_percent;
+    if (total_percent - 100.0).abs() > 0.2 { return Err("جمع درصد پروتئین، کربوهیدرات و چربی باید ۱۰۰ باشد.".to_string()); }
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    get_client(&conn, item.client_id)?;
+    let timestamp = now();
+    let calculated_at = if item.calculated_at.trim().is_empty() { Utc::now().date_naive().to_string() } else { item.calculated_at.clone() };
+    let id = if let Some(id) = item.id {
+        conn.execute("UPDATE nutrition_calculations SET visit_id=?1, calculated_at=?2, gender=?3, age=?4, height_cm=?5, weight_kg=?6, activity_level=?7, goal=?8, bmi=?9, ibw=?10, abw=?11, bmr=?12, tee=?13, target_calories=?14, calorie_adjustment_percent=?15, protein_percent=?16, carb_percent=?17, fat_percent=?18, protein_g=?19, carb_g=?20, fat_g=?21, notes=?22, updated_at=?23 WHERE id=?24 AND client_id=?25",
+            params![item.visit_id, calculated_at, item.gender, item.age, item.height_cm, item.weight_kg, item.activity_level, item.goal, item.bmi, item.ibw, item.abw, item.bmr, item.tee, item.target_calories, item.calorie_adjustment_percent, item.protein_percent, item.carb_percent, item.fat_percent, item.protein_g, item.carb_g, item.fat_g, item.notes, timestamp, id, item.client_id])
+            .map_err(|err| err.to_string())?;
+        id
+    } else {
+        conn.execute("INSERT INTO nutrition_calculations (client_id, visit_id, calculated_at, gender, age, height_cm, weight_kg, activity_level, goal, bmi, ibw, abw, bmr, tee, target_calories, calorie_adjustment_percent, protein_percent, carb_percent, fat_percent, protein_g, carb_g, fat_g, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?24)",
+            params![item.client_id, item.visit_id, calculated_at, item.gender, item.age, item.height_cm, item.weight_kg, item.activity_level, item.goal, item.bmi, item.ibw, item.abw, item.bmr, item.tee, item.target_calories, item.calorie_adjustment_percent, item.protein_percent, item.carb_percent, item.fat_percent, item.protein_g, item.carb_g, item.fat_g, item.notes, timestamp])
+            .map_err(|err| err.to_string())?;
+        conn.last_insert_rowid()
+    };
+    conn.query_row(&format!("{} WHERE id=?1", NUTRITION_CALC_SELECT), params![id], row_to_nutrition_calculation).map_err(|err| err.to_string())
+}
+
+fn row_to_diet_plan(row: &rusqlite::Row<'_>) -> rusqlite::Result<DietPlan> {
+    Ok(DietPlan {
+        id: row.get(0)?, client_id: row.get(1)?, visit_id: row.get(2)?, calculation_id: row.get(3)?,
+        title: row.get(4)?, plan_date: row.get(5)?, status: row.get(6)?, calories_target: row.get(7)?,
+        protein_target_g: row.get(8)?, carb_target_g: row.get(9)?, fat_target_g: row.get(10)?, meals_json: row.get(11)?,
+        hydration_text: row.get(12)?, activity_text: row.get(13)?, guidance_text: row.get(14)?, notes: row.get(15)?,
+        created_at: row.get(16)?, updated_at: row.get(17)?,
+    })
+}
+
+const DIET_PLAN_SELECT: &str = "SELECT id, client_id, visit_id, calculation_id, title, plan_date, status, calories_target, protein_target_g, carb_target_g, fat_target_g, meals_json, hydration_text, activity_text, guidance_text, notes, created_at, updated_at FROM diet_plans";
+
+#[tauri::command]
+fn list_client_diet_plans(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<DietPlan>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let mut stmt = conn.prepare(&format!("{} WHERE client_id=?1 ORDER BY plan_date DESC, id DESC", DIET_PLAN_SELECT)).map_err(|err| err.to_string())?;
+    let items = stmt.query_map(params![client_id], row_to_diet_plan).map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
+    Ok(items)
+}
+
+#[tauri::command]
+fn save_diet_plan(state: tauri::State<'_, AppState>, plan: DietPlan) -> Result<DietPlan, String> {
+    if plan.title.trim().is_empty() { return Err("عنوان برنامه غذایی الزامی است.".to_string()); }
+    if !is_valid_iso_date(&plan.plan_date) { return Err("تاریخ برنامه غذایی معتبر نیست.".to_string()); }
+    serde_json::from_str::<serde_json::Value>(&plan.meals_json).map_err(|_| "ساختار وعده‌های غذایی معتبر نیست.".to_string())?;
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    get_client(&conn, plan.client_id)?;
+    let timestamp = now();
+    let id = if let Some(id) = plan.id {
+        conn.execute("UPDATE diet_plans SET visit_id=?1, calculation_id=?2, title=?3, plan_date=?4, status=?5, calories_target=?6, protein_target_g=?7, carb_target_g=?8, fat_target_g=?9, meals_json=?10, hydration_text=?11, activity_text=?12, guidance_text=?13, notes=?14, updated_at=?15 WHERE id=?16 AND client_id=?17",
+            params![plan.visit_id, plan.calculation_id, plan.title, plan.plan_date, plan.status, plan.calories_target, plan.protein_target_g, plan.carb_target_g, plan.fat_target_g, plan.meals_json, plan.hydration_text, plan.activity_text, plan.guidance_text, plan.notes, timestamp, id, plan.client_id])
+            .map_err(|err| err.to_string())?;
+        id
+    } else {
+        conn.execute("INSERT INTO diet_plans (client_id, visit_id, calculation_id, title, plan_date, status, calories_target, protein_target_g, carb_target_g, fat_target_g, meals_json, hydration_text, activity_text, guidance_text, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?16)",
+            params![plan.client_id, plan.visit_id, plan.calculation_id, plan.title, plan.plan_date, plan.status, plan.calories_target, plan.protein_target_g, plan.carb_target_g, plan.fat_target_g, plan.meals_json, plan.hydration_text, plan.activity_text, plan.guidance_text, plan.notes, timestamp])
+            .map_err(|err| err.to_string())?;
+        conn.last_insert_rowid()
+    };
+    conn.query_row(&format!("{} WHERE id=?1", DIET_PLAN_SELECT), params![id], row_to_diet_plan).map_err(|err| err.to_string())
+}
+
+fn build_diet_plan_html(conn: &Connection, client: &Client, plan: &DietPlan) -> Result<String, String> {
+    let clinic_name = read_setting_or(conn, "clinic_name", "Dietoy")?;
+    let dietitian_name = read_setting_or(conn, "dietitian_name", "")?;
+    let header_title = read_setting_or(conn, "diet_plan_header_title", "برنامه غذایی اختصاصی")?;
+    let footer_text = read_setting_or(conn, "diet_plan_footer_text", "این برنامه بر اساس شرایط فردی مراجع تنظیم شده است.")?;
+    let logo_src = default_logo_data_uri();
+    let margin = read_number_setting(conn, "diet_plan_margin_mm", 14.0)?.clamp(5.0, 35.0);
+    let show_macros = read_setting_or(conn, "diet_plan_show_macros", "1")? != "0";
+    let show_calories = read_setting_or(conn, "diet_plan_show_calories", "1")? != "0";
+    let meals: serde_json::Value = serde_json::from_str(&plan.meals_json).unwrap_or_else(|_| serde_json::json!([]));
+    let mut meals_html = String::new();
+    if let Some(items) = meals.as_array() {
+        for meal in items {
+            let title = meal.get("title").and_then(|v| v.as_str()).unwrap_or("وعده");
+            let target_percent = meal.get("target_percent").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let notes = meal.get("notes").and_then(|v| v.as_str()).unwrap_or("");
+            let mut rows = String::new();
+            if let Some(food_items) = meal.get("items").and_then(|v| v.as_array()) {
+                for food in food_items {
+                    let name = food.get("title").and_then(|v| v.as_str()).unwrap_or("—");
+                    let amount = food.get("amount").and_then(|v| v.as_str()).unwrap_or("—");
+                    let calories = food.get("calories").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let protein = food.get("protein_g").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let carb = food.get("carb_g").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let fat = food.get("fat_g").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let detail = if show_macros { format!("پروتئین {}g · کربوهیدرات {}g · چربی {}g", number(protein,1), number(carb,1), number(fat,1)) } else { String::new() };
+                    let kcal = if show_calories { format!("{} kcal", number(calories,0)) } else { String::new() };
+                    rows.push_str(&format!("<tr><td><strong>{}</strong><small>{}</small></td><td>{}</td><td>{}</td></tr>", escape_html(name), escape_html(&detail), escape_html(amount), escape_html(&kcal)));
+                }
+            }
+            if rows.is_empty() { rows.push_str("<tr><td colspan=3 class=empty>برای این وعده آیتمی ثبت نشده است.</td></tr>"); }
+            meals_html.push_str(&format!("<section class=meal><div class=meal-head><div><span>سهم پیشنهادی {}٪</span><h2>{}</h2></div></div><table><tbody>{}</tbody></table>{}</section>", number(target_percent,0), escape_html(title), rows, if notes.trim().is_empty(){String::new()}else{format!("<p class=meal-note>{}</p>",escape_html(notes))}));
+        }
+    }
+    let macro_block = if show_macros { format!("<div class=target><span>پروتئین</span><b>{} g</b></div><div class=target><span>کربوهیدرات</span><b>{} g</b></div><div class=target><span>چربی</span><b>{} g</b></div>", number(plan.protein_target_g,0), number(plan.carb_target_g,0), number(plan.fat_target_g,0)) } else { String::new() };
+    let calorie_block = if show_calories { format!("<div class=target primary><span>کالری روزانه</span><b>{} kcal</b></div>", number(plan.calories_target,0)) } else { String::new() };
+    Ok(format!(r#"<!doctype html><html lang=fa dir=rtl><head><meta charset=utf-8><title>{title}</title><style>
+@page{{size:A4;margin:{margin}mm}}*{{box-sizing:border-box}}body{{font-family:Vazirmatn,Tahoma,Arial,sans-serif;color:#143c4c;background:#eef7f5;margin:0;line-height:1.75}}.toolbar{{position:sticky;top:0;z-index:3;background:#0F5079;color:#fff;padding:11px 20px;display:flex;justify-content:space-between;align-items:center}}button{{font:inherit;border:0;border-radius:12px;padding:9px 16px;font-weight:800;color:#0F5079;background:#8AE3C3;cursor:pointer}}main{{max-width:920px;margin:24px auto;background:#fff;border-radius:28px;overflow:hidden;box-shadow:0 24px 80px #0f507926}}header{{padding:30px 34px;background:linear-gradient(135deg,#0F5079,#16788a);color:#fff;position:relative}}header:after{{content:'';position:absolute;width:260px;height:260px;border-radius:50%;background:#8AE3C31f;left:-80px;top:-130px}}.logo{{display:block;width:92px;height:92px;object-fit:contain;border-radius:18px;margin-bottom:12px;box-shadow:0 10px 28px #063b5c55}}.brand{{font-size:13px;color:#b9f3df}}h1{{font-size:32px;margin:10px 0 2px}}header p{{margin:0;opacity:.9}}.targets{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:20px 34px;background:#f7fcfa}}.target{{border:1px solid #dbece6;border-radius:16px;padding:12px;background:#fff}}.target span{{display:block;font-size:12px;color:#72847f}}.target b{{font-size:19px;color:#0F5079}}.target.primary{{background:#e4f8f1;border-color:#8AE3C3}}.content{{padding:28px 34px}}.meal{{border:1px solid #dce9e5;border-radius:20px;overflow:hidden;margin-bottom:18px;break-inside:avoid}}.meal-head{{padding:14px 18px;background:linear-gradient(90deg,#effaf6,#fff)}}.meal-head span{{font-size:11px;color:#729187}}.meal h2{{margin:2px 0;color:#0F5079;font-size:20px}}table{{width:100%;border-collapse:collapse}}td{{padding:11px 16px;border-top:1px solid #edf2f0;vertical-align:top}}td:nth-child(2),td:nth-child(3){{width:22%;white-space:nowrap}}td small{{display:block;color:#7d8c87;font-size:10px}}.meal-note{{padding:10px 16px;margin:0;background:#fbfdfc;color:#526a62}}.guides{{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:24px}}.guide{{border-radius:18px;padding:15px;background:#f4faf8;border:1px solid #e0ece8}}.guide h3{{margin:0 0 6px;color:#0F5079}}.guide p{{white-space:pre-wrap;margin:0}}footer{{padding:18px 34px;border-top:1px solid #e6efec;text-align:center;color:#70817c;font-size:11px}}.empty{{text-align:center;color:#82918c}}@media print{{body{{background:#fff}}.toolbar{{display:none}}main{{margin:0;max-width:none;border-radius:0;box-shadow:none}}header{{-webkit-print-color-adjust:exact;print-color-adjust:exact}}}}@media(max-width:700px){{.targets{{grid-template-columns:repeat(2,1fr)}}.guides{{grid-template-columns:1fr}}}}
+</style></head><body><div class=toolbar><strong>پیش‌نمایش برنامه غذایی</strong><button onclick=window.print()>چاپ / ذخیره PDF</button></div><main><header><img class=logo src="{logo}" alt="Dietoy"><div class=brand>{clinic} · {dietitian}</div><h1>{header}</h1><p>{client} · تاریخ برنامه: <time data-date='{date}'>{date}</time></p></header><div class=targets>{calorie}{macros}</div><div class=content>{meals}<div class=guides><div class=guide><h3>آب و مایعات</h3><p>{hydration}</p></div><div class=guide><h3>فعالیت</h3><p>{activity}</p></div><div class=guide><h3>راهنمای اجرا</h3><p>{guidance}</p></div><div class=guide><h3>یادداشت متخصص</h3><p>{notes}</p></div></div></div><footer>{footer}</footer></main><script>document.querySelectorAll('time[data-date]').forEach(function(el){{var d=new Date(el.dataset.date+'T00:00:00');if(!isNaN(d))el.textContent=new Intl.DateTimeFormat('fa-IR-u-ca-persian',{{year:'numeric',month:'long',day:'numeric'}}).format(d)}})</script></body></html>"#,
+        title=escape_html(&plan.title), margin=margin, logo=logo_src, clinic=escape_html(&clinic_name), dietitian=escape_html(&dietitian_name), header=escape_html(&header_title), client=escape_html(&client.full_name), date=escape_html(&plan.plan_date), calorie=calorie_block, macros=macro_block, meals=meals_html, hydration=escape_html(non_empty(&plan.hydration_text,"طبق توصیه متخصص")), activity=escape_html(non_empty(&plan.activity_text,"طبق برنامه فردی")), guidance=escape_html(non_empty(&plan.guidance_text,"وعده‌ها را منظم و مطابق مقادیر نوشته‌شده مصرف کنید.")), notes=escape_html(non_empty(&plan.notes,"—")), footer=escape_html(&footer_text)))
+}
+
+#[tauri::command]
+fn export_diet_plan(state: tauri::State<'_, AppState>, plan_id: i64) -> Result<String, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let plan = conn.query_row(&format!("{} WHERE id=?1", DIET_PLAN_SELECT), params![plan_id], row_to_diet_plan)
+        .optional().map_err(|err| err.to_string())?.ok_or_else(|| "برنامه غذایی پیدا نشد.".to_string())?;
+    let client = get_client(&conn, plan.client_id)?;
+    let html = build_diet_plan_html(&conn, &client, &plan)?;
+    drop(conn);
+    let dir = client_folder(&state, plan.client_id)?.join("diet-plans");
+    fs::create_dir_all(&dir).map_err(|err| format!("ساخت پوشه برنامه غذایی انجام نشد: {err}"))?;
+    let path = dir.join(format!("diet-plan-{}-{}.html", plan.id.unwrap_or(plan_id), Utc::now().format("%Y%m%d-%H%M%S")));
+    fs::write(&path, html).map_err(|err| format!("ساخت فایل برنامه غذایی انجام نشد: {err}"))?;
+    open_path_with_system(path.clone())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> {
     Ok(Attachment {
         id: row.get(0)?,
@@ -1427,6 +1825,35 @@ fn open_attachment(state: tauri::State<'_, AppState>, attachment_id: i64) -> Res
 }
 
 
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut index = 0;
+    while index < data.len() {
+        let b0 = data[index];
+        let b1 = if index + 1 < data.len() { data[index + 1] } else { 0 };
+        let b2 = if index + 2 < data.len() { data[index + 2] } else { 0 };
+        output.push(TABLE[(b0 >> 2) as usize] as char);
+        output.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if index + 1 < data.len() {
+            output.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if index + 2 < data.len() {
+            output.push(TABLE[(b2 & 0x3f) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        index += 3;
+    }
+    output
+}
+
+fn default_logo_data_uri() -> String {
+    format!("data:image/png;base64,{}", base64_encode(include_bytes!("../../public/logo.png")))
+}
+
 fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -1537,30 +1964,34 @@ fn bmi_value(weight_kg: f64, height_cm: f64) -> f64 {
 }
 
 fn report_calculations(conn: &Connection, client: &Client) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), String> {
+    let saved = conn.query_row(
+        "SELECT bmi, ibw, abw, bmr, tee, target_calories, protein_percent, carb_percent, fat_percent FROM nutrition_calculations WHERE client_id=?1 ORDER BY calculated_at DESC, id DESC LIMIT 1",
+        params![client.id.unwrap_or_default()],
+        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?,row.get(7)?,row.get(8)?)),
+    ).optional().map_err(|err| err.to_string())?;
+    if let Some((bmi,ibw,abw,bmr,tee,target,protein_percent,carb_percent,fat_percent)) = saved {
+        let activity_factor = match client.activity_level.as_str() {
+            "sedentary" => read_number_setting(conn, "calc_activity_sedentary", 1.3)?,
+            "light" => read_number_setting(conn, "calc_activity_light", 1.3)?,
+            "moderate" => read_number_setting(conn, "calc_activity_moderate", 1.3)?,
+            "active" => read_number_setting(conn, "calc_activity_active", 1.3)?,
+            "very_active" => read_number_setting(conn, "calc_activity_very_active", 1.3)?, _ => 1.3,
+        };
+        return Ok((bmi,ibw,abw,bmr,tee,target,protein_percent,carb_percent,fat_percent,activity_factor));
+    }
     let bmi = bmi_value(client.weight_kg, client.height_cm);
     let height_m = client.height_cm / 100.0;
     let ibw_factor = read_number_setting(conn, "calc_ibw_bmi_factor", 22.0)?;
     let abw_divisor = read_number_setting(conn, "calc_abw_divisor", 4.0)?;
     let bmr_base = read_number_setting(conn, "calc_bmr_base", 24.0)?;
-    let gender_factor = if client.gender == "male" {
-        read_number_setting(conn, "calc_male_factor", 1.0)?
-    } else {
-        read_number_setting(conn, "calc_female_factor", 0.95)?
-    };
+    let gender_factor = if client.gender == "male" { read_number_setting(conn, "calc_male_factor", 1.0)? } else { read_number_setting(conn, "calc_female_factor", 0.95)? };
     let bmr_adjustment = read_number_setting(conn, "calc_bmr_adjustment", 1.1)?;
     let activity_factor = match client.activity_level.as_str() {
-        "sedentary" => read_number_setting(conn, "calc_activity_sedentary", 1.3)?,
-        "light" => read_number_setting(conn, "calc_activity_light", 1.3)?,
-        "moderate" => read_number_setting(conn, "calc_activity_moderate", 1.3)?,
-        "active" => read_number_setting(conn, "calc_activity_active", 1.3)?,
-        "very_active" => read_number_setting(conn, "calc_activity_very_active", 1.3)?,
-        _ => 1.3,
+        "sedentary" => read_number_setting(conn, "calc_activity_sedentary", 1.3)?, "light" => read_number_setting(conn, "calc_activity_light", 1.3)?,
+        "moderate" => read_number_setting(conn, "calc_activity_moderate", 1.3)?, "active" => read_number_setting(conn, "calc_activity_active", 1.3)?,
+        "very_active" => read_number_setting(conn, "calc_activity_very_active", 1.3)?, _ => 1.3,
     };
-    let goal_adjustment = match client.goal.as_str() {
-        "lose" => read_number_setting(conn, "calc_goal_loss", -500.0)?,
-        "gain" => read_number_setting(conn, "calc_goal_gain", 300.0)?,
-        _ => read_number_setting(conn, "calc_goal_maintain", 0.0)?,
-    };
+    let goal_adjustment = match client.goal.as_str() { "lose" => read_number_setting(conn, "calc_goal_loss", -500.0)?, "gain" => read_number_setting(conn, "calc_goal_gain", 300.0)?, _ => read_number_setting(conn, "calc_goal_maintain", 0.0)? };
     let protein_percent = read_number_setting(conn, "macro_protein_percent", 20.0)?;
     let carb_percent = read_number_setting(conn, "macro_carb_percent", 50.0)?;
     let fat_percent = read_number_setting(conn, "macro_fat_percent", 30.0)?;
@@ -1659,10 +2090,11 @@ fn visit_type_label(value: &str) -> &'static str {
 fn build_client_report_html(conn: &Connection, client: &Client) -> Result<String, String> {
     let clinic_name = read_setting(conn, "clinic_name").unwrap_or_default();
     let dietitian_name = read_setting(conn, "dietitian_name").unwrap_or_default();
+    let report_logo_src = default_logo_data_uri();
     let client_id = client.id.ok_or_else(|| "شناسه مراجع معتبر نیست.".to_string())?;
     let visits = {
         let mut stmt = conn
-            .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
+            .prepare("SELECT id, client_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, created_at, updated_at, visit_type, visit_mode_key, visit_mode_name_snapshot FROM visits WHERE client_id = ?1 ORDER BY visit_date ASC, visit_time ASC, id ASC")
             .map_err(|err| err.to_string())?;
         let rows = stmt
             .query_map(params![client_id], row_to_visit)
@@ -1795,14 +2227,14 @@ fn build_client_report_html(conn: &Connection, client: &Client) -> Result<String
 <style>
 @page { size:A4; margin:12mm; }
 *{box-sizing:border-box} body{font-family:Vazirmatn,Tahoma,Arial,sans-serif;direction:rtl;color:#1f312b;background:#edf3f1;margin:0;line-height:1.8} button{font:inherit}
-.toolbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;background:#123f34;color:#fff}.toolbar button{border:0;border-radius:12px;padding:9px 18px;background:#fff;color:#123f34;font-weight:800;cursor:pointer}.toolbar small{opacity:.8}
+.toolbar{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;background:#0F5079;color:#fff}.toolbar button{border:0;border-radius:12px;padding:9px 18px;background:#fff;color:#0F5079;font-weight:800;cursor:pointer}.toolbar small{opacity:.8}
 .page{max-width:980px;margin:24px auto;background:#fff;border-radius:28px;overflow:hidden;box-shadow:0 20px 60px rgba(21,67,55,.14)}
-.cover{position:relative;padding:34px;background:linear-gradient(135deg,#0d5d47,#164c40);color:#fff;overflow:hidden}.cover:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;background:rgba(255,255,255,.07);left:-70px;top:-120px}.brand{font-size:13px;opacity:.85}.cover h1{font-size:34px;margin:18px 0 4px}.cover p{margin:0;opacity:.9}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:26px;position:relative;z-index:1}.summary div{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);border-radius:16px;padding:12px}.summary span{display:block;font-size:11px;opacity:.8}.summary strong{font-size:18px}
-.content{padding:30px}.section{margin:0 0 30px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.section-title h2{font-size:21px;margin:0;color:#0d5d47}.section-title span{font-size:12px;color:#74817c}.tags{display:flex;flex-wrap:wrap;gap:8px}.tag,.status{display:inline-flex;border-radius:999px;background:#e6f2ed;color:#0d5d47;padding:5px 12px;font-size:12px;font-weight:800}
+.cover{position:relative;padding:34px;background:linear-gradient(135deg,#0F5079,#16788a);color:#fff;overflow:hidden}.cover:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;background:rgba(255,255,255,.07);left:-70px;top:-120px}.report-logo{display:block;width:88px;height:88px;object-fit:contain;border-radius:18px;margin-bottom:12px;box-shadow:0 12px 30px rgba(0,0,0,.18)}.brand{font-size:13px;opacity:.85}.cover h1{font-size:34px;margin:18px 0 4px}.cover p{margin:0;opacity:.9}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:26px;position:relative;z-index:1}.summary div{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.16);border-radius:16px;padding:12px}.summary span{display:block;font-size:11px;opacity:.8}.summary strong{font-size:18px}
+.content{padding:30px}.section{margin:0 0 30px}.section-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}.section-title h2{font-size:21px;margin:0;color:#0F5079}.section-title span{font-size:12px;color:#74817c}.tags{display:flex;flex-wrap:wrap;gap:8px}.tag,.status{display:inline-flex;border-radius:999px;background:#e6f2ed;color:#0F5079;padding:5px 12px;font-size:12px;font-weight:800}
 .profile-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.table-wrap{border:1px solid #e5ebe8;border-radius:16px;overflow:hidden;background:#fff}table{width:100%;border-collapse:collapse}th,td{padding:10px 12px;border-bottom:1px solid #edf0ee;text-align:right;vertical-align:top}tr:last-child th,tr:last-child td{border-bottom:0}th{width:38%;background:#f7faf8;color:#466158}td small{color:#7a8983}
-.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{border:1px solid #dfe9e4;border-radius:18px;padding:15px;background:linear-gradient(180deg,#fff,#f7faf8)}.metric span{display:block;color:#6d7c76;font-size:12px}.metric b{display:block;margin-top:5px;color:#0d5d47;font-size:22px}.macro-table{margin-top:14px}
-.visit-card{border:1px solid #dfe8e4;border-radius:20px;padding:18px;margin:14px 0;background:#fff;break-inside:auto}.visit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.visit-head h3{font-size:19px;margin:2px 0;color:#183d33}.visit-head p{margin:0;color:#77847f;font-size:13px}.eyebrow{font-size:11px;color:#7d8b86}.meta-row{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.meta-row span{border-radius:10px;background:#f3f7f5;padding:6px 10px;font-size:12px;color:#52665f}.visit-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.visit-grid h4,.notes h4{margin:0 0 8px;color:#31564b;font-size:14px}.service-line{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #edf1ef;padding:9px 0}.service-line:last-child{border-bottom:0}.service-line small{display:block;color:#78857f}.service-line b{white-space:nowrap;color:#0d5d47}.notes{margin-top:14px;border:1px dashed #d9e3de;border-radius:14px;padding:12px;background:#fbfcfb}.notes p{margin:0;white-space:pre-wrap}.empty{border:1px dashed #d9e3de;border-radius:14px;padding:16px;text-align:center;color:#7a8782;background:#fafcfb}.empty.large{padding:30px}
-.files{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.file-card{display:flex;gap:12px;border:1px solid #e1e9e5;border-radius:16px;padding:12px;background:#fff}.file-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:#e7f2ed;color:#0d5d47}.file-card strong{display:block}.file-card span{display:block;color:#77847f;font-size:12px}.file-card p{margin:4px 0 0;font-size:12px}.client-note{white-space:pre-wrap;border-radius:16px;padding:16px;background:#f8faf9;border:1px dashed #d8e2dd}
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.metric{border:1px solid #dfe9e4;border-radius:18px;padding:15px;background:linear-gradient(180deg,#fff,#f7faf8)}.metric span{display:block;color:#6d7c76;font-size:12px}.metric b{display:block;margin-top:5px;color:#0F5079;font-size:22px}.macro-table{margin-top:14px}
+.visit-card{border:1px solid #dfe8e4;border-radius:20px;padding:18px;margin:14px 0;background:#fff;break-inside:auto}.visit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.visit-head h3{font-size:19px;margin:2px 0;color:#183d33}.visit-head p{margin:0;color:#77847f;font-size:13px}.eyebrow{font-size:11px;color:#7d8b86}.meta-row{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.meta-row span{border-radius:10px;background:#f3f7f5;padding:6px 10px;font-size:12px;color:#52665f}.visit-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.visit-grid h4,.notes h4{margin:0 0 8px;color:#31564b;font-size:14px}.service-line{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #edf1ef;padding:9px 0}.service-line:last-child{border-bottom:0}.service-line small{display:block;color:#78857f}.service-line b{white-space:nowrap;color:#0F5079}.notes{margin-top:14px;border:1px dashed #d9e3de;border-radius:14px;padding:12px;background:#fbfcfb}.notes p{margin:0;white-space:pre-wrap}.empty{border:1px dashed #d9e3de;border-radius:14px;padding:16px;text-align:center;color:#7a8782;background:#fafcfb}.empty.large{padding:30px}
+.files{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.file-card{display:flex;gap:12px;border:1px solid #e1e9e5;border-radius:16px;padding:12px;background:#fff}.file-icon{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:#e7f2ed;color:#0F5079}.file-card strong{display:block}.file-card span{display:block;color:#77847f;font-size:12px}.file-card p{margin:4px 0 0;font-size:12px}.client-note{white-space:pre-wrap;border-radius:16px;padding:16px;background:#f8faf9;border:1px dashed #d8e2dd}
 footer{padding:18px 30px;border-top:1px solid #edf0ee;color:#819089;font-size:11px;text-align:center}
 h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside:avoid}.visit-head{break-inside:avoid}
 @media(max-width:760px){.summary,.metric-grid{grid-template-columns:repeat(2,1fr)}.profile-grid,.visit-grid,.files{grid-template-columns:1fr}.content{padding:20px}.cover{padding:26px}.cover h1{font-size:27px}}
@@ -1812,7 +2244,7 @@ h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside
 <body>
 <div class="toolbar"><div><strong>پیش‌نمایش پرونده</strong><small> برای PDF تمیز، گزینه Headers and footers چاپ را خاموش کنید.</small></div><button onclick="window.print()">چاپ / ذخیره PDF</button></div>
 <main class="page">
-<header class="cover"><div class="brand">{{CLINIC}} {{DIETITIAN}}</div><h1>{{CLIENT_NAME}}</h1><p>پرونده یکپارچه تغذیه، اندازه‌گیری و خدمات</p><div class="summary"><div><span>هدف</span><strong>{{GOAL}}</strong></div><div><span>وزن فعلی</span><strong>{{WEIGHT}} kg</strong></div><div><span>تعداد ویزیت</span><strong>{{VISIT_COUNT}}</strong></div><div><span>آخرین ویزیت</span><strong><time data-date="{{LAST_VISIT}}">{{LAST_VISIT_FALLBACK}}</time></strong></div></div></header>
+<header class="cover"><img class="report-logo" src="{{LOGO_SRC}}" alt="Dietoy"><div class="brand">{{CLINIC}} {{DIETITIAN}}</div><h1>{{CLIENT_NAME}}</h1><p>پرونده یکپارچه تغذیه، اندازه‌گیری و خدمات</p><div class="summary"><div><span>هدف</span><strong>{{GOAL}}</strong></div><div><span>وزن فعلی</span><strong>{{WEIGHT}} kg</strong></div><div><span>تعداد ویزیت</span><strong>{{VISIT_COUNT}}</strong></div><div><span>آخرین ویزیت</span><strong><time data-date="{{LAST_VISIT}}">{{LAST_VISIT_FALLBACK}}</time></strong></div></div></header>
 <div class="content">
 <section class="section"><div class="section-title"><h2>مسیرهای مراقبت</h2><span>نمای کلی پرونده</span></div><div class="tags">{{TRACKS}}</div></section>
 <section class="section"><div class="section-title"><h2>اطلاعات پایه</h2><span>آخرین اطلاعات ثبت‌شده</span></div><div class="table-wrap"><table><tbody>{{BASE_ROWS}}</tbody></table></div></section>
@@ -1826,6 +2258,7 @@ h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside
 </body></html>"#;
 
     Ok(template
+        .replace("{{LOGO_SRC}}", &report_logo_src)
         .replace("{{CLIENT_NAME}}", &escape_html(&client.full_name))
         .replace("{{CLINIC}}", &escape_html(non_empty(&clinic_name, "Dietoy")))
         .replace("{{DIETITIAN}}", &escape_html(&dietitian_name))
@@ -2065,6 +2498,13 @@ fn get_settings(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
         macro_protein_percent: read_number_setting(&conn, "macro_protein_percent", 20.0)?,
         macro_carb_percent: read_number_setting(&conn, "macro_carb_percent", 50.0)?,
         macro_fat_percent: read_number_setting(&conn, "macro_fat_percent", 30.0)?,
+        diet_plan_header_title: read_setting_or(&conn, "diet_plan_header_title", "برنامه غذایی اختصاصی")?,
+        diet_plan_footer_text: read_setting_or(&conn, "diet_plan_footer_text", "این برنامه بر اساس شرایط فردی مراجع تنظیم شده است.")?,
+        diet_plan_margin_mm: read_number_setting(&conn, "diet_plan_margin_mm", 14.0)?,
+        diet_plan_show_logo: read_setting_or(&conn, "diet_plan_show_logo", "1")? != "0",
+        diet_plan_show_macros: read_setting_or(&conn, "diet_plan_show_macros", "1")? != "0",
+        diet_plan_show_calories: read_setting_or(&conn, "diet_plan_show_calories", "1")? != "0",
+        report_show_contact: read_setting_or(&conn, "report_show_contact", "1")? != "0",
     })
 }
 
@@ -2107,6 +2547,13 @@ fn save_settings(state: tauri::State<'_, AppState>, settings: Settings) -> Resul
     for (key, value) in calc_values {
         write_setting(&conn, key, &value.to_string())?;
     }
+    write_setting(&conn, "diet_plan_header_title", &settings.diet_plan_header_title)?;
+    write_setting(&conn, "diet_plan_footer_text", &settings.diet_plan_footer_text)?;
+    write_setting(&conn, "diet_plan_margin_mm", &settings.diet_plan_margin_mm.to_string())?;
+    write_setting(&conn, "diet_plan_show_logo", if settings.diet_plan_show_logo { "1" } else { "0" })?;
+    write_setting(&conn, "diet_plan_show_macros", if settings.diet_plan_show_macros { "1" } else { "0" })?;
+    write_setting(&conn, "diet_plan_show_calories", if settings.diet_plan_show_calories { "1" } else { "0" })?;
+    write_setting(&conn, "report_show_contact", if settings.report_show_contact { "1" } else { "0" })?;
 
     Ok(settings)
 }
@@ -2323,9 +2770,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             archive_client,
             change_credentials,
+            delete_visit_service,
             dashboard_stats,
             export_client_backup,
             export_client_report,
+            export_diet_plan,
             export_data_backup,
             export_database,
             get_settings,
@@ -2335,9 +2784,12 @@ pub fn run() {
             import_visit_attachment,
             list_client_records,
             list_client_attachments,
+            list_client_diet_plans,
+            list_client_nutrition_calculations,
             list_clients,
             list_client_visits,
             list_service_catalog,
+            list_visit_modes,
             list_visit_services,
             login,
             open_attachment,
@@ -2345,7 +2797,10 @@ pub fn run() {
             restore_data_backup,
             save_client,
             save_client_record,
+            save_diet_plan,
+            save_nutrition_calculation,
             save_service_catalog_item,
+            save_visit_mode,
             save_visit_measurements,
             save_visit_service,
             save_visit_with_measurements,
