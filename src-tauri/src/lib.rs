@@ -1,6 +1,8 @@
 use chrono::{Duration, Local, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use argon2::{password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString}, Argon2};
+use rand_core::OsRng;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -141,6 +143,8 @@ struct VisitService {
     visit_id: i64,
     #[serde(default)]
     service_id: Option<i64>,
+    #[serde(default)]
+    device_id: Option<i64>,
     service_name_snapshot: String,
     #[serde(default = "default_service_group")]
     service_group_snapshot: String,
@@ -148,6 +152,8 @@ struct VisitService {
     body_area: String,
     #[serde(default)]
     device_name: String,
+    #[serde(default)]
+    device_rental_percent_snapshot: f64,
     #[serde(default)]
     duration_minutes: Option<i64>,
     #[serde(default)]
@@ -158,6 +164,18 @@ struct VisitService {
     total: f64,
     #[serde(default)]
     notes: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DeviceCatalogItem {
+    id: Option<i64>,
+    name: String,
+    #[serde(default)]
+    rental_percent: f64,
+    #[serde(default = "default_active_service")]
+    active: bool,
+    #[serde(default)]
+    description: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -401,6 +419,8 @@ struct DashboardStats {
     recent_visits: Vec<DashboardVisitSummary>,
 }
 
+fn default_true() -> bool { true }
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Settings {
     dietitian_name: String,
@@ -435,6 +455,81 @@ struct Settings {
     diet_plan_show_macros: bool,
     diet_plan_show_calories: bool,
     report_show_contact: bool,
+    #[serde(default = "default_true")]
+    reports_completed_only: bool,
+    #[serde(default = "default_true")]
+    reports_use_service_revenue: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SecurityStatus {
+    username: String,
+    must_change_credentials: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct MonthlyReportSummary {
+    unique_clients: i64,
+    completed_visits: i64,
+    scheduled_visits: i64,
+    canceled_visits: i64,
+    diet_plans: i64,
+    body_analysis_cases: i64,
+    device_cases: i64,
+    device_units: f64,
+    consultations: i64,
+    services_count: i64,
+    total_revenue: f64,
+    device_rental_due: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct MonthlyServiceGroupRow {
+    group_key: String,
+    cases: i64,
+    quantity: f64,
+    revenue: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct MonthlyDeviceUsageRow {
+    device_id: Option<i64>,
+    device_name: String,
+    service_name: String,
+    body_area: String,
+    cases: i64,
+    quantity: f64,
+    total_minutes: f64,
+    revenue: f64,
+    rental_percent: f64,
+    rental_due: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct MonthlyDeviceCaseRow {
+    visit_id: i64,
+    visit_date: String,
+    client_id: i64,
+    client_name: String,
+    device_name: String,
+    service_name: String,
+    body_area: String,
+    quantity: f64,
+    revenue: f64,
+    rental_percent: f64,
+    rental_due: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct MonthlyReport {
+    start_date: String,
+    end_date: String,
+    completed_only: bool,
+    revenue_from_services: bool,
+    summary: MonthlyReportSummary,
+    service_groups: Vec<MonthlyServiceGroupRow>,
+    devices: Vec<MonthlyDeviceUsageRow>,
+    device_cases_detail: Vec<MonthlyDeviceCaseRow>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -541,10 +636,28 @@ fn validate_measurements_input(measurements: &VisitMeasurements) -> Result<(), S
     Ok(())
 }
 
-fn hash_password(password: &str) -> String {
+fn legacy_hash_password(password: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn hash_password(password: &str) -> Result<String, String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|err| format!("ساخت رمز امن انجام نشد: {err}"))
+}
+
+fn verify_password(password: &str, stored: &str, algorithm: &str) -> bool {
+    if algorithm == "argon2" || stored.starts_with("$argon2") {
+        return PasswordHash::new(stored)
+            .ok()
+            .and_then(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).ok())
+            .is_some();
+    }
+    legacy_hash_password(password) == stored
 }
 
 const CALCULATION_DEFAULT_SETTINGS: [(&str, &str); 17] = [
@@ -741,10 +854,12 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             visit_id INTEGER NOT NULL,
             service_id INTEGER,
+            device_id INTEGER,
             service_name_snapshot TEXT NOT NULL,
             service_group_snapshot TEXT NOT NULL DEFAULT 'other',
             body_area TEXT NOT NULL DEFAULT '',
             device_name TEXT NOT NULL DEFAULT '',
+            device_rental_percent_snapshot REAL NOT NULL DEFAULT 0,
             duration_minutes INTEGER,
             price REAL NOT NULL DEFAULT 0,
             quantity REAL NOT NULL DEFAULT 1,
@@ -779,6 +894,14 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             default_price REAL NOT NULL DEFAULT 0,
             default_duration_minutes INTEGER,
             body_area_required INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            description TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS device_catalog (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            rental_percent REAL NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1,
             description TEXT NOT NULL DEFAULT ''
         );
@@ -869,6 +992,8 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "service_catalog", "group_key", "group_key TEXT NOT NULL DEFAULT 'other'")?;
     ensure_column(conn, "service_catalog", "description", "description TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "visit_services", "service_group_snapshot", "service_group_snapshot TEXT NOT NULL DEFAULT 'other'")?;
+    ensure_column(conn, "visit_services", "device_id", "device_id INTEGER")?;
+    ensure_column(conn, "visit_services", "device_rental_percent_snapshot", "device_rental_percent_snapshot REAL NOT NULL DEFAULT 0")?;
     ensure_column(conn, "visits", "track_id", "track_id INTEGER")?;
     ensure_column(conn, "visits", "visit_type", "visit_type TEXT NOT NULL DEFAULT 'initial'")?;
     ensure_column(conn, "visits", "visit_mode_key", "visit_mode_key TEXT NOT NULL DEFAULT 'in_person'")?;
@@ -883,6 +1008,8 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_visits_request_id ON visits(request_id)", [])
         .map_err(|err| err.to_string())?;
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_client_records_visit_id ON client_records(visit_id)", [])
+        .map_err(|err| err.to_string())?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_services_device ON visit_services(device_id)", [])
         .map_err(|err| err.to_string())?;
 
     let service_count: i64 = conn
@@ -975,7 +1102,19 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     write_default_setting(conn, "diet_plan_show_macros", "1")?;
     write_default_setting(conn, "diet_plan_show_calories", "1")?;
     write_default_setting(conn, "report_show_contact", "1")?;
-    write_default_setting(conn, "password_hash", &hash_password("admin"))?;
+    write_default_setting(conn, "reports_completed_only", "1")?;
+    write_default_setting(conn, "reports_use_service_revenue", "1")?;
+    if read_setting_or(conn, "password_hash", "")?.is_empty() {
+        write_setting(conn, "password_hash", &legacy_hash_password("admin"))?;
+        write_setting(conn, "password_algorithm", "sha256")?;
+        write_setting(conn, "must_change_credentials", "1")?;
+    } else {
+        write_default_setting(conn, "password_algorithm", "sha256")?;
+        let username = read_setting_or(conn, "username", "admin")?;
+        let stored = read_setting_or(conn, "password_hash", "")?;
+        let must_change = username == "admin" && stored == legacy_hash_password("admin");
+        write_default_setting(conn, "must_change_credentials", if must_change { "1" } else { "0" })?;
+    }
     Ok(())
 }
 
@@ -1926,20 +2065,75 @@ fn save_service_catalog_item(
     .map_err(|err| err.to_string())
 }
 
+fn row_to_device_catalog_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceCatalogItem> {
+    Ok(DeviceCatalogItem {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        rental_percent: row.get(2)?,
+        active: row.get::<_, i64>(3)? == 1,
+        description: row.get(4)?,
+    })
+}
+
+#[tauri::command]
+fn list_device_catalog(state: tauri::State<'_, AppState>, active_only: bool) -> Result<Vec<DeviceCatalogItem>, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let sql = if active_only {
+        "SELECT id, name, rental_percent, active, description FROM device_catalog WHERE active=1 ORDER BY name ASC, id ASC"
+    } else {
+        "SELECT id, name, rental_percent, active, description FROM device_catalog ORDER BY active DESC, name ASC, id ASC"
+    };
+    let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
+    stmt.query_map([], row_to_device_catalog_item)
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+fn save_device_catalog_item(state: tauri::State<'_, AppState>, item: DeviceCatalogItem) -> Result<DeviceCatalogItem, String> {
+    let name = item.name.trim();
+    if name.is_empty() { return Err("نام دستگاه الزامی است.".to_string()); }
+    if !item.rental_percent.is_finite() || !(0.0..=100.0).contains(&item.rental_percent) {
+        return Err("درصد سهم اجاره باید بین ۰ تا ۱۰۰ باشد.".to_string());
+    }
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let id = if let Some(id) = item.id {
+        let affected = conn.execute(
+            "UPDATE device_catalog SET name=?1, rental_percent=?2, active=?3, description=?4 WHERE id=?5",
+            params![name, item.rental_percent, if item.active {1} else {0}, item.description, id],
+        ).map_err(|err| if err.to_string().contains("UNIQUE") { "دستگاهی با این نام قبلاً ثبت شده است.".to_string() } else { err.to_string() })?;
+        if affected == 0 { return Err("دستگاه موردنظر پیدا نشد.".to_string()); }
+        id
+    } else {
+        conn.execute(
+            "INSERT INTO device_catalog (name, rental_percent, active, description) VALUES (?1, ?2, ?3, ?4)",
+            params![name, item.rental_percent, if item.active {1} else {0}, item.description],
+        ).map_err(|err| if err.to_string().contains("UNIQUE") { "دستگاهی با این نام قبلاً ثبت شده است.".to_string() } else { err.to_string() })?;
+        conn.last_insert_rowid()
+    };
+    conn.query_row(
+        "SELECT id, name, rental_percent, active, description FROM device_catalog WHERE id=?1",
+        params![id], row_to_device_catalog_item,
+    ).map_err(|err| err.to_string())
+}
+
 fn row_to_visit_service(row: &rusqlite::Row<'_>) -> rusqlite::Result<VisitService> {
     Ok(VisitService {
         id: row.get(0)?,
         visit_id: row.get(1)?,
         service_id: row.get(2)?,
-        service_name_snapshot: row.get(3)?,
-        service_group_snapshot: row.get(4)?,
-        body_area: row.get(5)?,
-        device_name: row.get(6)?,
-        duration_minutes: row.get(7)?,
-        price: row.get(8)?,
-        quantity: row.get(9)?,
-        total: row.get(10)?,
-        notes: row.get(11)?,
+        device_id: row.get(3)?,
+        service_name_snapshot: row.get(4)?,
+        service_group_snapshot: row.get(5)?,
+        body_area: row.get(6)?,
+        device_name: row.get(7)?,
+        device_rental_percent_snapshot: row.get(8)?,
+        duration_minutes: row.get(9)?,
+        price: row.get(10)?,
+        quantity: row.get(11)?,
+        total: row.get(12)?,
+        notes: row.get(13)?,
     })
 }
 
@@ -1953,20 +2147,20 @@ fn save_visit_service(state: tauri::State<'_, AppState>, service: VisitService) 
     let total = if service.total > 0.0 { service.total } else { service.price * service.quantity.max(1.0) };
     let id = if let Some(id) = service.id {
         conn.execute(
-            "UPDATE visit_services SET service_id=?1, service_name_snapshot=?2, service_group_snapshot=?3, body_area=?4, device_name=?5, duration_minutes=?6, price=?7, quantity=?8, total=?9, notes=?10 WHERE id=?11",
-            params![service.service_id, service.service_name_snapshot, service.service_group_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity, total, service.notes, id],
+            "UPDATE visit_services SET visit_id=?1, service_id=?2, device_id=?3, service_name_snapshot=?4, service_group_snapshot=?5, body_area=?6, device_name=?7, device_rental_percent_snapshot=?8, duration_minutes=?9, price=?10, quantity=?11, total=?12, notes=?13 WHERE id=?14",
+            params![service.visit_id, service.service_id, service.device_id, service.service_name_snapshot, service.service_group_snapshot, service.body_area, service.device_name, service.device_rental_percent_snapshot, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes, id],
         )
         .map_err(|err| err.to_string())?;
         id
     } else {
         conn.execute(
-            "INSERT INTO visit_services (visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![service.visit_id, service.service_id, service.service_name_snapshot, service.service_group_snapshot, service.body_area, service.device_name, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes],
+            "INSERT INTO visit_services (visit_id, service_id, device_id, service_name_snapshot, service_group_snapshot, body_area, device_name, device_rental_percent_snapshot, duration_minutes, price, quantity, total, notes) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![service.visit_id, service.service_id, service.device_id, service.service_name_snapshot, service.service_group_snapshot, service.body_area, service.device_name, service.device_rental_percent_snapshot, service.duration_minutes, service.price, service.quantity.max(1.0), total, service.notes],
         )
         .map_err(|err| err.to_string())?;
         conn.last_insert_rowid()
     };
-    conn.query_row("SELECT id, visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE id=?1", params![id], row_to_visit_service)
+    conn.query_row("SELECT id, visit_id, service_id, device_id, service_name_snapshot, service_group_snapshot, body_area, device_name, device_rental_percent_snapshot, duration_minutes, price, quantity, total, notes FROM visit_services WHERE id=?1", params![id], row_to_visit_service)
         .map_err(|err| err.to_string())
 }
 
@@ -1974,7 +2168,7 @@ fn save_visit_service(state: tauri::State<'_, AppState>, service: VisitService) 
 fn list_visit_services(state: tauri::State<'_, AppState>, visit_id: i64) -> Result<Vec<VisitService>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
+        .prepare("SELECT id, visit_id, service_id, device_id, service_name_snapshot, service_group_snapshot, body_area, device_name, device_rental_percent_snapshot, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
         .map_err(|err| err.to_string())?;
     let items = stmt
         .query_map(params![visit_id], row_to_visit_service)
@@ -2410,6 +2604,54 @@ fn open_attachment(state: tauri::State<'_, AppState>, attachment_id: i64) -> Res
 }
 
 #[tauri::command]
+fn delete_attachment(state: tauri::State<'_, AppState>, attachment_id: i64) -> Result<(), String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let path: String = conn
+        .query_row("SELECT local_path FROM attachments WHERE id=?1", params![attachment_id], |row| row.get(0))
+        .optional()
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| "فایل پیوست پیدا نشد.".to_string())?;
+
+    let file_path = PathBuf::from(path);
+    let mut staged_file: Option<(PathBuf, PathBuf)> = None;
+    if file_path.exists() {
+        let data_root = state.db_path.parent().ok_or_else(|| "مسیر داده‌های برنامه پیدا نشد.".to_string())?;
+        let canonical_root = fs::canonicalize(data_root).map_err(|err| err.to_string())?;
+        let canonical_file = fs::canonicalize(&file_path).map_err(|err| err.to_string())?;
+        if canonical_file.starts_with(canonical_root) {
+            let staged = canonical_file.with_file_name(format!(
+                ".dietory-delete-{}-{}",
+                attachment_id,
+                Utc::now().format("%Y%m%d%H%M%S%3f")
+            ));
+            fs::rename(&canonical_file, &staged).map_err(|err| format!("آماده‌سازی فایل برای حذف انجام نشد: {err}"))?;
+            staged_file = Some((staged, canonical_file));
+        }
+    }
+
+    let affected = match conn.execute("DELETE FROM attachments WHERE id=?1", params![attachment_id]) {
+        Ok(value) => value,
+        Err(error) => {
+            if let Some((staged, original)) = staged_file.as_ref() {
+                if staged.exists() { let _ = fs::rename(staged, original); }
+            }
+            return Err(error.to_string());
+        }
+    };
+    if affected == 0 {
+        if let Some((staged, original)) = staged_file.as_ref() {
+            if staged.exists() { let _ = fs::rename(staged, original); }
+        }
+        return Err("فایل پیوست پیدا نشد.".to_string());
+    }
+
+    if let Some((staged, _)) = staged_file {
+        if staged.exists() { let _ = fs::remove_file(staged); }
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn read_attachment_preview(state: tauri::State<'_, AppState>, attachment_id: i64) -> Result<AttachmentPreview, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let (path, file_name): (String, String) = conn.query_row(
@@ -2619,7 +2861,7 @@ fn report_calculations(conn: &Connection, client: &Client) -> Result<(f64, f64, 
 
 fn list_visit_services_inner(conn: &Connection, visit_id: i64) -> Result<Vec<VisitService>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, visit_id, service_id, service_name_snapshot, service_group_snapshot, body_area, device_name, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
+        .prepare("SELECT id, visit_id, service_id, device_id, service_name_snapshot, service_group_snapshot, body_area, device_name, device_rental_percent_snapshot, duration_minutes, price, quantity, total, notes FROM visit_services WHERE visit_id=?1 ORDER BY id ASC")
         .map_err(|err| err.to_string())?;
     let items = stmt
         .query_map(params![visit_id], row_to_visit_service)
@@ -2693,7 +2935,7 @@ fn get_client_profile_bundle(state: tauri::State<'_, AppState>, client_id: i64) 
     let mut services_by_visit: HashMap<i64, Vec<VisitService>> = HashMap::new();
     {
         let mut services_stmt = conn.prepare(
-            "SELECT s.id, s.visit_id, s.service_id, s.service_name_snapshot, s.service_group_snapshot, s.body_area, s.device_name, s.duration_minutes, s.price, s.quantity, s.total, s.notes FROM visit_services s JOIN visits v ON v.id=s.visit_id WHERE v.client_id=?1 ORDER BY s.id ASC"
+            "SELECT s.id, s.visit_id, s.service_id, s.device_id, s.service_name_snapshot, s.service_group_snapshot, s.body_area, s.device_name, s.device_rental_percent_snapshot, s.duration_minutes, s.price, s.quantity, s.total, s.notes FROM visit_services s JOIN visits v ON v.id=s.visit_id WHERE v.client_id=?1 ORDER BY s.id ASC"
         ).map_err(|err| err.to_string())?;
         for item in services_stmt.query_map(params![client_id], row_to_visit_service).map_err(|err| err.to_string())? {
             let service = item.map_err(|err| err.to_string())?;
@@ -3132,6 +3374,8 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
     let next_week_iso = (today + Duration::days(7)).format("%Y-%m-%d").to_string();
     let month_prefix = today.format("%Y-%m").to_string();
     let month_like = format!("{}%", month_prefix);
+    let completed_only = read_setting_or(&conn, "reports_completed_only", "1")? != "0";
+    let service_revenue = read_setting_or(&conn, "reports_use_service_revenue", "1")? != "0";
 
     let total_clients: i64 = conn
         .query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0))
@@ -3153,28 +3397,33 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
     };
 
     let visits_today: i64 = conn
-        .query_row("SELECT COUNT(*) FROM visits WHERE visit_date = ?1", params![today_iso], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM visits WHERE visit_date = ?1 AND status NOT IN ('canceled','cancelled')", params![today_iso], |row| row.get(0))
         .map_err(|err| err.to_string())?;
     let visits_next_7_days: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM visits WHERE visit_date >= ?1 AND visit_date <= ?2",
+            "SELECT COUNT(*) FROM visits WHERE visit_date >= ?1 AND visit_date <= ?2 AND status NOT IN ('canceled','cancelled')",
             params![today_iso, next_week_iso],
             |row| row.get(0),
         )
         .map_err(|err| err.to_string())?;
+    let visits_this_month_sql = if completed_only {
+        "SELECT COUNT(*) FROM visits WHERE visit_date LIKE ?1 AND status IN ('completed','done')"
+    } else {
+        "SELECT COUNT(*) FROM visits WHERE visit_date LIKE ?1 AND status NOT IN ('canceled','cancelled')"
+    };
     let visits_this_month: i64 = conn
-        .query_row("SELECT COUNT(*) FROM visits WHERE visit_date LIKE ?1", params![month_like], |row| row.get(0))
+        .query_row(visits_this_month_sql, params![month_like], |row| row.get(0))
         .map_err(|err| err.to_string())?;
-    let revenue_this_month: f64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(total_fee), 0) FROM visits WHERE visit_date LIKE ?1",
-            params![month_like],
-            |row| row.get(0),
-        )
-        .map_err(|err| err.to_string())?;
+    let status_clause = if completed_only { "v.status IN ('completed','done')" } else { "v.status NOT IN ('canceled','cancelled')" };
+    let revenue_sql = if service_revenue {
+        format!("SELECT COALESCE(SUM(s.total),0) FROM visit_services s JOIN visits v ON v.id=s.visit_id WHERE v.visit_date LIKE ?1 AND {status_clause}")
+    } else {
+        format!("SELECT COALESCE(SUM(v.total_fee),0) FROM visits v WHERE v.visit_date LIKE ?1 AND {status_clause}")
+    };
+    let revenue_this_month: f64 = conn.query_row(&revenue_sql, params![month_like], |row| row.get(0)).map_err(|err| err.to_string())?;
     let upcoming_followups: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM visits WHERE next_visit_enabled = 1 AND next_visit_date >= ?1",
+            "SELECT COUNT(*) FROM visits WHERE next_visit_enabled = 1 AND next_visit_date >= ?1 AND status NOT IN ('canceled','cancelled')",
             params![today_iso],
             |row| row.get(0),
         )
@@ -3194,7 +3443,7 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
 
     let upcoming_visits = {
         let mut stmt = conn
-            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee, visits.visit_type FROM visits JOIN clients ON clients.id = visits.client_id WHERE visits.visit_date >= ?1 ORDER BY visits.visit_date ASC, visits.visit_time ASC LIMIT 6")
+            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee, visits.visit_type FROM visits JOIN clients ON clients.id = visits.client_id WHERE visits.visit_date >= ?1 AND visits.status NOT IN ('canceled','cancelled') ORDER BY visits.visit_date ASC, visits.visit_time ASC LIMIT 8")
             .map_err(|err| err.to_string())?;
         let items = stmt
             .query_map(params![today_iso], row_to_dashboard_visit)
@@ -3205,8 +3454,13 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
     };
 
     let recent_visits = {
+        let recent_sql = if completed_only {
+            "SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee, visits.visit_type FROM visits JOIN clients ON clients.id = visits.client_id WHERE visits.status IN ('completed','done') ORDER BY visits.visit_date DESC, visits.visit_time DESC, visits.id DESC LIMIT 8"
+        } else {
+            "SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee, visits.visit_type FROM visits JOIN clients ON clients.id = visits.client_id WHERE visits.status NOT IN ('canceled','cancelled') ORDER BY visits.visit_date DESC, visits.visit_time DESC, visits.id DESC LIMIT 8"
+        };
         let mut stmt = conn
-            .prepare("SELECT visits.id, visits.client_id, clients.full_name, visits.visit_date, visits.visit_time, visits.status, visits.total_fee, visits.visit_type FROM visits JOIN clients ON clients.id = visits.client_id ORDER BY visits.visit_date DESC, visits.visit_time DESC, visits.id DESC LIMIT 6")
+            .prepare(recent_sql)
             .map_err(|err| err.to_string())?;
         let items = stmt
             .query_map([], row_to_dashboard_visit)
@@ -3233,6 +3487,111 @@ fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, 
         recent_clients,
         upcoming_visits,
         recent_visits,
+    })
+}
+
+#[tauri::command]
+fn monthly_report(state: tauri::State<'_, AppState>, start_date: String, end_date: String) -> Result<MonthlyReport, String> {
+    if !is_valid_iso_date(&start_date) || !is_valid_iso_date(&end_date) || start_date > end_date {
+        return Err("بازه تاریخ گزارش معتبر نیست.".to_string());
+    }
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let completed_only = read_setting_or(&conn, "reports_completed_only", "1")? != "0";
+    let revenue_from_services = read_setting_or(&conn, "reports_use_service_revenue", "1")? != "0";
+    let actual_condition = if completed_only {
+        "v.status IN ('completed','done')"
+    } else {
+        "v.status NOT IN ('canceled','cancelled')"
+    };
+
+    let scalar_i64 = |sql: &str| -> Result<i64, String> {
+        conn.query_row(sql, params![&start_date, &end_date], |row| row.get(0)).map_err(|err| err.to_string())
+    };
+    let scalar_f64 = |sql: &str| -> Result<f64, String> {
+        conn.query_row(sql, params![&start_date, &end_date], |row| row.get(0)).map_err(|err| err.to_string())
+    };
+
+    let unique_clients = scalar_i64(&format!("SELECT COUNT(DISTINCT v.client_id) FROM visits v WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition}"))?;
+    let completed_visits = scalar_i64("SELECT COUNT(*) FROM visits v WHERE v.visit_date BETWEEN ?1 AND ?2 AND v.status IN ('completed','done')")?;
+    let scheduled_visits = scalar_i64("SELECT COUNT(*) FROM visits v WHERE v.visit_date BETWEEN ?1 AND ?2 AND v.status IN ('scheduled','confirmed','tentative','pending')")?;
+    let canceled_visits = scalar_i64("SELECT COUNT(*) FROM visits v WHERE v.visit_date BETWEEN ?1 AND ?2 AND v.status IN ('canceled','cancelled')")?;
+    let diet_plans = scalar_i64("SELECT COUNT(*) FROM diet_plans WHERE plan_date BETWEEN ?1 AND ?2 AND status <> 'archived'")?;
+    let body_analysis_cases = scalar_i64(&format!(
+        "SELECT COUNT(*) FROM (            SELECT 'v:' || v.id AS case_key FROM visits v LEFT JOIN visit_services s ON s.visit_id=v.id             WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND (v.visit_type='body_analysis' OR s.service_group_snapshot='body_analysis')             UNION             SELECT CASE WHEN a.visit_id IS NULL THEN 'a:' || a.id ELSE 'v:' || a.visit_id END AS case_key             FROM attachments a LEFT JOIN visits v ON v.id=a.visit_id             WHERE a.attachment_date BETWEEN ?1 AND ?2 AND a.category='body_analysis' AND (a.visit_id IS NULL OR {actual_condition})        )"
+    ))?;
+    let device_cases = scalar_i64(&format!(
+        "SELECT COUNT(DISTINCT v.id) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND s.service_group_snapshot='device'"
+    ))?;
+    let device_units = scalar_f64(&format!(
+        "SELECT COALESCE(SUM(s.quantity),0) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND s.service_group_snapshot='device'"
+    ))?;
+    let consultations = scalar_i64(&format!(
+        "SELECT COUNT(DISTINCT v.id) FROM visits v LEFT JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND (v.visit_type='consultation' OR s.service_group_snapshot='consultation')"
+    ))?;
+    let services_count = scalar_i64(&format!(
+        "SELECT COUNT(*) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition}"
+    ))?;
+    let total_revenue = if revenue_from_services {
+        scalar_f64(&format!("SELECT COALESCE(SUM(s.total),0) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition}"))?
+    } else {
+        scalar_f64(&format!("SELECT COALESCE(SUM(v.total_fee),0) FROM visits v WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition}"))?
+    };
+    let device_rental_due = scalar_f64(&format!(
+        "SELECT COALESCE(SUM(s.total * COALESCE(s.device_rental_percent_snapshot,0) / 100.0),0) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND s.service_group_snapshot='device'"
+    ))?;
+
+    let service_groups = {
+        let sql = format!(
+            "SELECT s.service_group_snapshot, COUNT(*), COALESCE(SUM(s.quantity),0), COALESCE(SUM(s.total),0) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} GROUP BY s.service_group_snapshot ORDER BY SUM(s.total) DESC, s.service_group_snapshot ASC"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        stmt.query_map(params![&start_date, &end_date], |row| Ok(MonthlyServiceGroupRow {
+            group_key: row.get(0)?, cases: row.get(1)?, quantity: row.get(2)?, revenue: row.get(3)?,
+        })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?
+    };
+
+    let devices = {
+        let sql = format!(
+            "SELECT s.device_id, CASE WHEN TRIM(s.device_name)='' THEN 'بدون نام دستگاه' ELSE s.device_name END, s.service_name_snapshot, CASE WHEN TRIM(s.body_area)='' THEN 'ناحیه ثبت نشده' ELSE s.body_area END, COUNT(DISTINCT v.id), COALESCE(SUM(s.quantity),0), COALESCE(SUM(COALESCE(s.duration_minutes,0) * s.quantity),0), COALESCE(SUM(s.total),0), COALESCE(s.device_rental_percent_snapshot,0), COALESCE(SUM(s.total * COALESCE(s.device_rental_percent_snapshot,0) / 100.0),0) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND s.service_group_snapshot='device' GROUP BY s.device_id, s.device_name, s.service_name_snapshot, s.body_area, COALESCE(s.device_rental_percent_snapshot,0) ORDER BY s.device_name ASC, SUM(s.total) DESC"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        stmt.query_map(params![&start_date, &end_date], |row| Ok(MonthlyDeviceUsageRow {
+            device_id: row.get(0)?, device_name: row.get(1)?, service_name: row.get(2)?, body_area: row.get(3)?, cases: row.get(4)?, quantity: row.get(5)?, total_minutes: row.get(6)?, revenue: row.get(7)?, rental_percent: row.get(8)?, rental_due: row.get(9)?,
+        })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?
+    };
+
+    let device_cases_detail = {
+        let sql = format!(
+            "SELECT v.id, v.visit_date, c.id, c.full_name, CASE WHEN TRIM(s.device_name)='' THEN 'بدون نام دستگاه' ELSE s.device_name END, s.service_name_snapshot, CASE WHEN TRIM(s.body_area)='' THEN 'ناحیه ثبت نشده' ELSE s.body_area END, s.quantity, s.total, COALESCE(s.device_rental_percent_snapshot,0), s.total * COALESCE(s.device_rental_percent_snapshot,0) / 100.0 FROM visits v JOIN clients c ON c.id=v.client_id JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND s.service_group_snapshot='device' ORDER BY v.visit_date ASC, v.id ASC, s.id ASC"
+        );
+        let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
+        stmt.query_map(params![&start_date, &end_date], |row| Ok(MonthlyDeviceCaseRow {
+            visit_id: row.get(0)?, visit_date: row.get(1)?, client_id: row.get(2)?, client_name: row.get(3)?, device_name: row.get(4)?, service_name: row.get(5)?, body_area: row.get(6)?, quantity: row.get(7)?, revenue: row.get(8)?, rental_percent: row.get(9)?, rental_due: row.get(10)?,
+        })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?
+    };
+
+    Ok(MonthlyReport {
+        start_date: start_date.clone(),
+        end_date: end_date.clone(),
+        completed_only,
+        revenue_from_services,
+        summary: MonthlyReportSummary {
+            unique_clients,
+            completed_visits,
+            scheduled_visits,
+            canceled_visits,
+            diet_plans,
+            body_analysis_cases,
+            device_cases,
+            device_units,
+            consultations,
+            services_count,
+            total_revenue,
+            device_rental_due,
+        },
+        service_groups,
+        devices,
+        device_cases_detail,
     })
 }
 
@@ -3273,6 +3632,8 @@ fn get_settings(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
         diet_plan_show_macros: read_setting_or(&conn, "diet_plan_show_macros", "1")? != "0",
         diet_plan_show_calories: read_setting_or(&conn, "diet_plan_show_calories", "1")? != "0",
         report_show_contact: read_setting_or(&conn, "report_show_contact", "1")? != "0",
+        reports_completed_only: read_setting_or(&conn, "reports_completed_only", "1")? != "0",
+        reports_use_service_revenue: read_setting_or(&conn, "reports_use_service_revenue", "1")? != "0",
     })
 }
 
@@ -3322,6 +3683,8 @@ fn save_settings(state: tauri::State<'_, AppState>, settings: Settings) -> Resul
     write_setting(&conn, "diet_plan_show_macros", if settings.diet_plan_show_macros { "1" } else { "0" })?;
     write_setting(&conn, "diet_plan_show_calories", if settings.diet_plan_show_calories { "1" } else { "0" })?;
     write_setting(&conn, "report_show_contact", if settings.report_show_contact { "1" } else { "0" })?;
+    write_setting(&conn, "reports_completed_only", if settings.reports_completed_only { "1" } else { "0" })?;
+    write_setting(&conn, "reports_use_service_revenue", if settings.reports_use_service_revenue { "1" } else { "0" })?;
 
     Ok(settings)
 }
@@ -3365,22 +3728,40 @@ fn login(state: tauri::State<'_, AppState>, input: LoginInput) -> Result<bool, S
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let username = read_setting(&conn, "username")?;
     let password_hash = read_setting(&conn, "password_hash")?;
-    Ok(input.username.trim() == username && hash_password(&input.password) == password_hash)
+    let algorithm = read_setting_or(&conn, "password_algorithm", "sha256")?;
+    let valid = input.username.trim() == username && verify_password(&input.password, &password_hash, &algorithm);
+    if valid && algorithm != "argon2" {
+        write_setting(&conn, "password_hash", &hash_password(&input.password)?)?;
+        write_setting(&conn, "password_algorithm", "argon2")?;
+    }
+    Ok(valid)
+}
+
+#[tauri::command]
+fn get_security_status(state: tauri::State<'_, AppState>) -> Result<SecurityStatus, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    Ok(SecurityStatus {
+        username: read_setting_or(&conn, "username", "admin")?,
+        must_change_credentials: read_setting_or(&conn, "must_change_credentials", "0")? != "0",
+    })
 }
 
 #[tauri::command]
 fn change_credentials(state: tauri::State<'_, AppState>, input: CredentialsInput) -> Result<(), String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let password_hash = read_setting(&conn, "password_hash")?;
-    if hash_password(&input.current_password) != password_hash {
+    let algorithm = read_setting_or(&conn, "password_algorithm", "sha256")?;
+    if !verify_password(&input.current_password, &password_hash, &algorithm) {
         return Err("رمز فعلی درست نیست.".to_string());
     }
     let username = input.username.trim();
-    if username.is_empty() || input.password.len() < 4 {
-        return Err("نام کاربری و رمز جدید را کامل وارد کنید.".to_string());
+    if username.len() < 3 || input.password.chars().count() < 8 {
+        return Err("نام کاربری باید حداقل ۳ نویسه و رمز جدید حداقل ۸ نویسه باشد.".to_string());
     }
     write_setting(&conn, "username", username)?;
-    write_setting(&conn, "password_hash", &hash_password(&input.password))?;
+    write_setting(&conn, "password_hash", &hash_password(&input.password)?)?;
+    write_setting(&conn, "password_algorithm", "argon2")?;
+    write_setting(&conn, "must_change_credentials", "0")?;
     Ok(())
 }
 
@@ -3633,6 +4014,7 @@ pub fn run() {
             archive_client,
             change_credentials,
             cleanup_auto_created_visits,
+            delete_attachment,
             delete_client_permanently,
             delete_visit,
             delete_visit_service,
@@ -3645,6 +4027,7 @@ pub fn run() {
             export_database,
             get_client_profile_bundle,
             get_client_by_id,
+            get_security_status,
             get_settings,
             get_visit_detail,
             import_brand_asset,
@@ -3657,10 +4040,12 @@ pub fn run() {
             list_client_nutrition_calculations,
             list_clients,
             list_client_visits,
+            list_device_catalog,
             list_service_catalog,
             list_visit_modes,
             list_visit_services,
             login,
+            monthly_report,
             open_attachment,
             open_client_folder,
             read_attachment_preview,
@@ -3669,6 +4054,7 @@ pub fn run() {
             save_client,
             save_client_record,
             save_care_track,
+            save_device_catalog_item,
             save_diet_plan,
             save_nutrition_calculation,
             save_service_catalog_item,
