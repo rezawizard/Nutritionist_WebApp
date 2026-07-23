@@ -1,8 +1,8 @@
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Duration, Local, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration as StdDuration;
@@ -83,6 +83,8 @@ struct Visit {
     next_visit_status: String,
     #[serde(default)]
     total_fee: f64,
+    #[serde(default)]
+    request_id: String,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -334,6 +336,12 @@ struct AttachmentPreview {
     file_name: String,
 }
 
+#[derive(Debug, Serialize)]
+struct CleanupResult {
+    deleted_count: i64,
+    backup_path: String,
+}
+
 fn default_active_service() -> bool {
     true
 }
@@ -461,6 +469,10 @@ struct CredentialsInput {
 
 fn now() -> String {
     Utc::now().to_rfc3339()
+}
+
+fn local_today() -> String {
+    Local::now().date_naive().to_string()
 }
 
 fn is_valid_iso_date(value: &str) -> bool {
@@ -622,6 +634,8 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             age INTEGER NOT NULL,
             height_cm REAL NOT NULL,
             weight_kg REAL NOT NULL,
+            base_height_cm REAL NOT NULL DEFAULT 0,
+            base_weight_kg REAL NOT NULL DEFAULT 0,
             activity_level TEXT NOT NULL,
             goal TEXT NOT NULL,
             notes TEXT NOT NULL DEFAULT '',
@@ -638,6 +652,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS client_records (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             client_id INTEGER NOT NULL,
+            visit_id INTEGER,
             record_date TEXT NOT NULL,
             weight_kg REAL NOT NULL,
             height_cm REAL NOT NULL,
@@ -677,6 +692,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
             next_visit_time TEXT NOT NULL DEFAULT '',
             next_visit_status TEXT NOT NULL DEFAULT '',
             total_fee REAL NOT NULL DEFAULT 0,
+            request_id TEXT,
             legacy_record_id INTEGER UNIQUE,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
@@ -857,11 +873,17 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "visits", "visit_type", "visit_type TEXT NOT NULL DEFAULT 'initial'")?;
     ensure_column(conn, "visits", "visit_mode_key", "visit_mode_key TEXT NOT NULL DEFAULT 'in_person'")?;
     ensure_column(conn, "visits", "visit_mode_name_snapshot", "visit_mode_name_snapshot TEXT NOT NULL DEFAULT 'حضوری'")?;
+    ensure_column(conn, "visits", "request_id", "request_id TEXT")?;
+    ensure_column(conn, "client_records", "visit_id", "visit_id INTEGER")?;
     ensure_column(conn, "attachments", "track_id", "track_id INTEGER")?;
     ensure_column(conn, "attachments", "related_type", "related_type TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "attachments", "related_id", "related_id INTEGER")?;
     ensure_column(conn, "nutrition_calculations", "track_id", "track_id INTEGER")?;
     ensure_column(conn, "diet_plans", "track_id", "track_id INTEGER")?;
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_visits_request_id ON visits(request_id)", [])
+        .map_err(|err| err.to_string())?;
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_client_records_visit_id ON client_records(visit_id)", [])
+        .map_err(|err| err.to_string())?;
 
     let service_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM service_catalog", [], |row| row.get(0))
@@ -902,6 +924,30 @@ fn init_db(conn: &Connection) -> Result<(), String> {
 
     ensure_column(conn, "clients", "phone", "phone TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "clients", "email", "email TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(conn, "clients", "base_height_cm", "base_height_cm REAL NOT NULL DEFAULT 0")?;
+    ensure_column(conn, "clients", "base_weight_kg", "base_weight_kg REAL NOT NULL DEFAULT 0")?;
+    conn.execute(
+        "UPDATE clients
+         SET base_height_cm = COALESCE((
+             SELECT m.height_cm FROM visits v JOIN visit_measurements m ON m.visit_id=v.id
+             WHERE v.client_id=clients.id AND v.reason='ثبت اولیه مراجعه' AND v.clinical_notes='ثبت اولیه مراجعه' AND m.notes='ثبت اولیه مراجعه'
+               AND ABS((julianday(v.created_at)-julianday(clients.created_at))*86400) <= 60
+             ORDER BY v.id ASC LIMIT 1
+         ), height_cm)
+         WHERE base_height_cm <= 0",
+        [],
+    ).map_err(|err| err.to_string())?;
+    conn.execute(
+        "UPDATE clients
+         SET base_weight_kg = COALESCE((
+             SELECT m.weight_kg FROM visits v JOIN visit_measurements m ON m.visit_id=v.id
+             WHERE v.client_id=clients.id AND v.reason='ثبت اولیه مراجعه' AND v.clinical_notes='ثبت اولیه مراجعه' AND m.notes='ثبت اولیه مراجعه'
+               AND ABS((julianday(v.created_at)-julianday(clients.created_at))*86400) <= 60
+             ORDER BY v.id ASC LIMIT 1
+         ), weight_kg)
+         WHERE base_weight_kg <= 0",
+        [],
+    ).map_err(|err| err.to_string())?;
     ensure_column(
         conn,
         "clients",
@@ -977,6 +1023,49 @@ fn migrate_legacy_records(conn: &Connection) -> Result<(), String> {
     .map_err(|err| format!("مهاجرت اندازه‌گیری‌های قدیمی انجام نشد: {err}"))?;
 
     conn.execute(
+        "UPDATE client_records
+         SET visit_id = (SELECT visits.id FROM visits WHERE visits.legacy_record_id = client_records.id)
+         WHERE visit_id IS NULL
+           AND EXISTS (SELECT 1 FROM visits WHERE visits.legacy_record_id = client_records.id)",
+        [],
+    )
+    .map_err(|err| format!("اتصال رکوردهای قدیمی به ویزیت‌ها انجام نشد: {err}"))?;
+
+    // نسخه‌های قبلی برای هر اندازه‌گیری یک client_record بدون visit_id می‌ساختند.
+    // نزدیک‌ترین رکورد هم‌تاریخ و هم‌مقدار را فقط یک‌بار به ویزیت متناظر متصل می‌کنیم.
+    let record_visit_candidates = {
+        let mut stmt = conn.prepare(
+            "SELECT r.id, v.id
+             FROM client_records r
+             JOIN visits v ON v.client_id=r.client_id AND v.visit_date=r.record_date
+             JOIN visit_measurements m ON m.visit_id=v.id
+             WHERE r.visit_id IS NULL
+               AND NOT EXISTS (SELECT 1 FROM client_records linked WHERE linked.visit_id=v.id)
+               AND ABS(r.weight_kg-m.weight_kg) < 0.001
+               AND (m.height_cm IS NULL OR ABS(r.height_cm-m.height_cm) < 0.001)
+               AND ABS((julianday(r.created_at)-julianday(v.created_at))*86400) <= 600
+             ORDER BY ABS((julianday(r.created_at)-julianday(v.created_at))*86400), r.id, v.id"
+        ).map_err(|err| format!("خواندن نگاشت تاریخچه قدیمی انجام نشد: {err}"))?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|err| format!("خواندن نگاشت تاریخچه قدیمی انجام نشد: {err}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| format!("خواندن نگاشت تاریخچه قدیمی انجام نشد: {err}"))?
+    };
+    let mut linked_records = HashSet::new();
+    let mut linked_visits = HashSet::new();
+    for (record_id, visit_id) in record_visit_candidates {
+        if linked_records.contains(&record_id) || linked_visits.contains(&visit_id) { continue; }
+        let affected = conn.execute(
+            "UPDATE client_records SET visit_id=?1 WHERE id=?2 AND visit_id IS NULL",
+            params![visit_id, record_id],
+        ).map_err(|err| format!("اتصال تاریخچه قدیمی به ویزیت انجام نشد: {err}"))?;
+        if affected > 0 {
+            linked_records.insert(record_id);
+            linked_visits.insert(visit_id);
+        }
+    }
+
+    conn.execute(
         "UPDATE visits SET updated_at = ?1 WHERE updated_at IS NULL OR updated_at = ''",
         params![timestamp],
     )
@@ -1045,7 +1134,7 @@ fn save_client(state: tauri::State<'_, AppState>, client: Client) -> Result<Clie
 
     if let Some(id) = client.id {
         conn.execute(
-            "UPDATE clients SET full_name=?1, gender=?2, age=?3, height_cm=?4, weight_kg=?5, activity_level=?6, goal=?7, notes=?8, archived=?9, updated_at=?10, phone=?11, email=?12, profile_image_path=?13 WHERE id=?14",
+            "UPDATE clients SET full_name=?1, gender=?2, age=?3, height_cm=?4, weight_kg=?5, base_height_cm=?4, base_weight_kg=?5, activity_level=?6, goal=?7, notes=?8, archived=?9, updated_at=?10, phone=?11, email=?12, profile_image_path=?13 WHERE id=?14",
             params![
                 client.full_name,
                 client.gender,
@@ -1067,7 +1156,7 @@ fn save_client(state: tauri::State<'_, AppState>, client: Client) -> Result<Clie
         get_client(&conn, id)
     } else {
         conn.execute(
-            "INSERT INTO clients (full_name, gender, age, height_cm, weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9, ?10, ?11, ?12)",
+            "INSERT INTO clients (full_name, gender, age, height_cm, weight_kg, base_height_cm, base_weight_kg, activity_level, goal, notes, archived, created_at, updated_at, phone, email, profile_image_path) VALUES (?1, ?2, ?3, ?4, ?5, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9, ?10, ?11, ?12)",
             params![
                 client.full_name,
                 client.gender,
@@ -1109,10 +1198,50 @@ fn get_client(conn: &Connection, id: i64) -> Result<Client, String> {
 }
 
 #[tauri::command]
+fn get_client_by_id(state: tauri::State<'_, AppState>, id: i64) -> Result<Client, String> {
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    get_client(&conn, id)
+}
+
+fn refresh_client_latest_measurements_inner(conn: &Connection, client_id: i64) -> Result<(), String> {
+    let latest: Option<(f64, Option<f64>)> = conn
+        .query_row(
+            "SELECT m.weight_kg, m.height_cm
+             FROM visits v
+             JOIN visit_measurements m ON m.visit_id = v.id
+             WHERE v.client_id = ?1
+             ORDER BY v.visit_date DESC,
+                      CASE WHEN v.visit_time = '' THEN 0 ELSE 1 END DESC,
+                      v.visit_time DESC,
+                      v.id DESC
+             LIMIT 1",
+            params![client_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|err| err.to_string())?;
+
+    if let Some((weight, height)) = latest {
+        conn.execute(
+            "UPDATE clients SET weight_kg=?1, height_cm=COALESCE(?2, height_cm), updated_at=?3 WHERE id=?4",
+            params![weight, height, now(), client_id],
+        )
+        .map_err(|err| err.to_string())?;
+    } else {
+        conn.execute(
+            "UPDATE clients SET weight_kg=CASE WHEN base_weight_kg>0 THEN base_weight_kg ELSE weight_kg END, height_cm=CASE WHEN base_height_cm>0 THEN base_height_cm ELSE height_cm END, updated_at=?1 WHERE id=?2",
+            params![now(), client_id],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn list_client_records(state: tauri::State<'_, AppState>, client_id: i64) -> Result<Vec<ClientRecord>, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT * FROM client_records WHERE client_id = ?1 ORDER BY record_date ASC, id ASC")
+        .prepare("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records WHERE client_id = ?1 ORDER BY record_date ASC, id ASC")
         .map_err(|err| err.to_string())?;
     let records = stmt
         .query_map(params![client_id], row_to_record)
@@ -1142,7 +1271,7 @@ fn save_client_record(state: tauri::State<'_, AppState>, record: ClientRecord) -
             params![record.record_date, record.weight_kg, record.height_cm, record.notes, timestamp, id],
         )
         .map_err(|err| err.to_string())?;
-        conn.query_row("SELECT * FROM client_records WHERE id = ?1", params![id], row_to_record)
+        conn.query_row("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records WHERE id = ?1", params![id], row_to_record)
             .map_err(|err| err.to_string())
     } else {
         conn.execute(
@@ -1151,7 +1280,7 @@ fn save_client_record(state: tauri::State<'_, AppState>, record: ClientRecord) -
         )
         .map_err(|err| err.to_string())?;
         let id = conn.last_insert_rowid();
-        conn.query_row("SELECT * FROM client_records WHERE id = ?1", params![id], row_to_record)
+        conn.query_row("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records WHERE id = ?1", params![id], row_to_record)
             .map_err(|err| err.to_string())
     }
 }
@@ -1214,7 +1343,7 @@ fn ensure_care_track_inner(conn: &Connection, client_id: i64, track_type: &str, 
         .map_err(|err| err.to_string())?;
     conn.execute(
         "INSERT INTO care_tracks (client_id, track_type, goal, title, start_date, status, target_weight, notes, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,'active',NULL,'',?6,?6)",
-        params![client_id, track_type, goal, care_track_title(track_type), Utc::now().date_naive().to_string(), timestamp],
+        params![client_id, track_type, goal, care_track_title(track_type), local_today(), timestamp],
     ).map_err(|err| err.to_string())?;
     Ok(conn.last_insert_rowid())
 }
@@ -1329,6 +1458,7 @@ fn row_to_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Visit> {
         next_visit_time: row.get(11)?,
         next_visit_status: row.get(12)?,
         total_fee: row.get(13)?,
+        request_id: String::new(),
         created_at: row.get(14)?,
         updated_at: row.get(15)?,
         visit_type: row.get(16)?,
@@ -1427,18 +1557,34 @@ fn save_visit_with_measurements(
     if let Some(measurements) = measurements.as_ref() {
         validate_measurements_input(measurements)?;
     }
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    get_client(&conn, visit.client_id)?;
+
+    let mut conn = state.conn.lock().map_err(|err| err.to_string())?;
+    if visit.id.is_none() && !visit.request_id.trim().is_empty() {
+        let existing_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM visits WHERE request_id=?1 AND client_id=?2 LIMIT 1",
+                params![visit.request_id.trim(), visit.client_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|err| err.to_string())?;
+        if let Some(id) = existing_id {
+            return get_visit_detail_inner(&conn, id);
+        }
+    }
+
+    let tx = conn.transaction().map_err(|err| err.to_string())?;
+    get_client(&tx, visit.client_id)?;
     let timestamp = now();
     let inferred_track_type = track_type_for_visit_type(&visit.visit_type);
     let track_id = match visit.track_id {
         Some(id) => Some(id),
-        None => Some(ensure_care_track_inner(&conn, visit.client_id, inferred_track_type, &visit.visit_type, &timestamp)?),
+        None => Some(ensure_care_track_inner(&tx, visit.client_id, inferred_track_type, &visit.visit_type, &timestamp)?),
     };
 
     let visit_id = if let Some(id) = visit.id {
-        conn.execute(
-            "UPDATE visits SET track_id=?1, visit_date=?2, visit_time=?3, status=?4, reason=?5, clinical_notes=?6, private_notes=?7, next_visit_enabled=?8, next_visit_date=?9, next_visit_time=?10, next_visit_status=?11, total_fee=?12, visit_type=?13, visit_mode_key=?14, visit_mode_name_snapshot=?15, updated_at=?16 WHERE id=?17",
+        let affected = tx.execute(
+            "UPDATE visits SET track_id=?1, visit_date=?2, visit_time=?3, status=?4, reason=?5, clinical_notes=?6, private_notes=?7, next_visit_enabled=?8, next_visit_date=?9, next_visit_time=?10, next_visit_status=?11, total_fee=?12, visit_type=?13, visit_mode_key=?14, visit_mode_name_snapshot=?15, updated_at=?16 WHERE id=?17 AND client_id=?18",
             params![
                 track_id,
                 visit.visit_date,
@@ -1456,14 +1602,17 @@ fn save_visit_with_measurements(
                 visit.visit_mode_key,
                 visit.visit_mode_name_snapshot,
                 timestamp,
-                id
+                id,
+                visit.client_id,
             ],
-        )
-        .map_err(|err| err.to_string())?;
+        ).map_err(|err| err.to_string())?;
+        if affected == 0 {
+            return Err("ویزیت برای این مراجعه‌کننده پیدا نشد.".to_string());
+        }
         id
     } else {
-        conn.execute(
-            "INSERT INTO visits (client_id, track_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, visit_type, visit_mode_key, visit_mode_name_snapshot, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)",
+        tx.execute(
+            "INSERT INTO visits (client_id, track_id, visit_date, visit_time, status, reason, clinical_notes, private_notes, next_visit_enabled, next_visit_date, next_visit_time, next_visit_status, total_fee, visit_type, visit_mode_key, visit_mode_name_snapshot, request_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, NULLIF(?17, ''), ?18, ?18)",
             params![
                 visit.client_id,
                 track_id,
@@ -1481,19 +1630,21 @@ fn save_visit_with_measurements(
                 visit.visit_type,
                 visit.visit_mode_key,
                 visit.visit_mode_name_snapshot,
-                timestamp
+                visit.request_id.trim(),
+                timestamp,
             ],
-        )
-        .map_err(|err| err.to_string())?;
-        conn.last_insert_rowid()
+        ).map_err(|err| err.to_string())?;
+        tx.last_insert_rowid()
     };
 
     if let Some(mut measurements) = measurements {
         measurements.visit_id = Some(visit_id);
-        save_visit_measurements_inner(&conn, measurements)?;
+        save_visit_measurements_inner(&tx, measurements)?;
     }
-
-    get_visit_detail_inner(&conn, visit_id)
+    refresh_client_latest_measurements_inner(&tx, visit.client_id)?;
+    let detail = get_visit_detail_inner(&tx, visit_id)?;
+    tx.commit().map_err(|err| err.to_string())?;
+    Ok(detail)
 }
 
 fn save_visit_measurements_inner(conn: &Connection, measurements: VisitMeasurements) -> Result<VisitMeasurements, String> {
@@ -1538,9 +1689,14 @@ fn save_visit_measurements_inner(conn: &Connection, measurements: VisitMeasureme
     sync_measurement_values(conn, &normalized_measurements, &timestamp)?;
 
     conn.execute(
-        "INSERT INTO client_records (client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at)
-         SELECT ?1, ?2, ?3, COALESCE(?4, 0), ?5, ?6, ?6
-         WHERE NOT EXISTS (SELECT 1 FROM visits WHERE visits.legacy_record_id IS NOT NULL AND visits.id = ?7)",
+        "INSERT INTO client_records (client_id, visit_id, record_date, weight_kg, height_cm, notes, created_at, updated_at)
+         VALUES (?1, ?7, ?2, ?3, COALESCE(?4, 0), ?5, ?6, ?6)
+         ON CONFLICT(visit_id) DO UPDATE SET
+             record_date=excluded.record_date,
+             weight_kg=excluded.weight_kg,
+             height_cm=excluded.height_cm,
+             notes=excluded.notes,
+             updated_at=excluded.updated_at",
         params![
             visit.client_id,
             visit.visit_date,
@@ -1559,7 +1715,121 @@ fn save_visit_measurements_inner(conn: &Connection, measurements: VisitMeasureme
 #[tauri::command]
 fn save_visit_measurements(state: tauri::State<'_, AppState>, measurements: VisitMeasurements) -> Result<VisitMeasurements, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    save_visit_measurements_inner(&conn, measurements)
+    let visit_id = measurements.visit_id.ok_or_else(|| "شناسه ویزیت برای اندازه‌گیری لازم است.".to_string())?;
+    let visit = get_visit(&conn, visit_id)?;
+    let saved = save_visit_measurements_inner(&conn, measurements)?;
+    refresh_client_latest_measurements_inner(&conn, visit.client_id)?;
+    Ok(saved)
+}
+
+fn delete_historical_record_for_visit_inner(conn: &Connection, visit_id: i64) -> Result<(), String> {
+    conn.execute("DELETE FROM client_records WHERE visit_id=?1", params![visit_id])
+        .map_err(|err| err.to_string())?;
+    // برای داده‌های نسخه‌های قدیمی که visit_id نداشتند، فقط رکوردی با تاریخ، مقدار و زمان ساخت متناظر حذف می‌شود.
+    conn.execute(
+        "DELETE FROM client_records
+         WHERE id=(
+             SELECT r.id
+             FROM client_records r
+             JOIN visits v ON v.id=?1
+             JOIN visit_measurements m ON m.visit_id=v.id
+             WHERE r.visit_id IS NULL
+               AND r.client_id=v.client_id
+               AND r.record_date=v.visit_date
+               AND ABS(r.weight_kg-m.weight_kg) < 0.001
+               AND (m.height_cm IS NULL OR ABS(r.height_cm-m.height_cm) < 0.001)
+               AND ABS((julianday(r.created_at)-julianday(v.created_at))*86400) <= 600
+             ORDER BY ABS((julianday(r.created_at)-julianday(v.created_at))*86400), r.id
+             LIMIT 1
+         )",
+        params![visit_id],
+    ).map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_visit(state: tauri::State<'_, AppState>, id: i64) -> Result<Client, String> {
+    let mut conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let visit = get_visit(&conn, id)?;
+    let tx = conn.transaction().map_err(|err| err.to_string())?;
+    delete_historical_record_for_visit_inner(&tx, id)?;
+    let affected = tx.execute("DELETE FROM visits WHERE id=?1 AND client_id=?2", params![id, visit.client_id]).map_err(|err| err.to_string())?;
+    if affected == 0 { return Err("ویزیت پیدا نشد.".to_string()); }
+    refresh_client_latest_measurements_inner(&tx, visit.client_id)?;
+    let client = get_client(&tx, visit.client_id)?;
+    tx.commit().map_err(|err| err.to_string())?;
+    Ok(client)
+}
+
+#[tauri::command]
+fn cleanup_auto_created_visits(state: tauri::State<'_, AppState>) -> Result<CleanupResult, String> {
+    let mut conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT v.id, v.client_id, v.track_id, v.created_at
+         FROM visits v
+         JOIN clients c ON c.id=v.client_id
+         JOIN visit_measurements m ON m.visit_id=v.id
+         WHERE v.reason='ثبت اولیه مراجعه'
+           AND v.clinical_notes='ثبت اولیه مراجعه'
+           AND v.private_notes=''
+           AND m.notes='ثبت اولیه مراجعه'
+           AND v.visit_time=''
+           AND v.status='completed'
+           AND v.next_visit_enabled=0
+           AND v.total_fee=0
+           AND ABS((julianday(v.updated_at)-julianday(v.created_at))*86400) <= 1
+           AND ABS((julianday(m.updated_at)-julianday(m.created_at))*86400) <= 1
+           AND ABS((julianday(v.created_at)-julianday(c.created_at))*86400) <= 60
+           AND NOT EXISTS (SELECT 1 FROM visit_services s WHERE s.visit_id=v.id)
+           AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.visit_id=v.id)
+           AND NOT EXISTS (SELECT 1 FROM nutrition_calculations n WHERE n.visit_id=v.id)
+           AND NOT EXISTS (SELECT 1 FROM diet_plans d WHERE d.visit_id=v.id)"
+    ).map_err(|err| err.to_string())?;
+    let candidates = stmt.query_map([], |row| Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Option<i64>>(2)?,
+            row.get::<_, String>(3)?,
+        )))
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    drop(stmt);
+    if candidates.is_empty() {
+        return Ok(CleanupResult { deleted_count: 0, backup_path: String::new() });
+    }
+
+    let backup_path = state.db_path.parent().ok_or_else(|| "مسیر داده‌های برنامه پیدا نشد.".to_string())?
+        .join(format!("nutritionist-pre-auto-visit-cleanup-{}.sqlite", Utc::now().format("%Y%m%d-%H%M%S")));
+    let mut destination = Connection::open(&backup_path).map_err(|err| err.to_string())?;
+    {
+        let backup = rusqlite::backup::Backup::new(&conn, &mut destination).map_err(|err| err.to_string())?;
+        backup.run_to_completion(5, StdDuration::from_millis(50), None).map_err(|err| err.to_string())?;
+    }
+
+    let tx = conn.transaction().map_err(|err| err.to_string())?;
+    let mut affected_clients: Vec<i64> = Vec::new();
+    for (visit_id, client_id, track_id, visit_created_at) in &candidates {
+        delete_historical_record_for_visit_inner(&tx, *visit_id)?;
+        tx.execute("DELETE FROM visits WHERE id=?1", params![visit_id]).map_err(|err| err.to_string())?;
+        if let Some(track_id) = track_id {
+            // مسیر فقط زمانی حذف می‌شود که دقیقاً هم‌زمان با ویزیت مصنوعی ساخته شده، دست‌نخورده و کاملاً بدون وابستگی باشد.
+            tx.execute(
+                "DELETE FROM care_tracks
+                 WHERE id=?1 AND client_id=?2 AND status='active' AND notes=''
+                   AND ABS((julianday(created_at)-julianday(?3))*86400) <= 1
+                   AND NOT EXISTS (SELECT 1 FROM visits v WHERE v.track_id=care_tracks.id)
+                   AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.track_id=care_tracks.id)
+                   AND NOT EXISTS (SELECT 1 FROM nutrition_calculations n WHERE n.track_id=care_tracks.id)
+                   AND NOT EXISTS (SELECT 1 FROM diet_plans d WHERE d.track_id=care_tracks.id)",
+                params![track_id, client_id, visit_created_at],
+            ).map_err(|err| err.to_string())?;
+        }
+        if !affected_clients.contains(client_id) { affected_clients.push(*client_id); }
+    }
+    for client_id in affected_clients { refresh_client_latest_measurements_inner(&tx, client_id)?; }
+    tx.commit().map_err(|err| err.to_string())?;
+    Ok(CleanupResult { deleted_count: candidates.len() as i64, backup_path: backup_path.to_string_lossy().to_string() })
 }
 
 fn row_to_service_catalog_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServiceCatalogItem> {
@@ -1809,7 +2079,7 @@ fn save_nutrition_calculation(state: tauri::State<'_, AppState>, item: Nutrition
         Some(id) => Some(id),
         None => Some(ensure_care_track_inner(&conn, item.client_id, "diet", "nutrition_calculation", &timestamp)?),
     };
-    let calculated_at = if item.calculated_at.trim().is_empty() { Utc::now().date_naive().to_string() } else { item.calculated_at.clone() };
+    let calculated_at = if item.calculated_at.trim().is_empty() { local_today() } else { item.calculated_at.clone() };
     let id = if let Some(id) = item.id {
         conn.execute("UPDATE nutrition_calculations SET visit_id=?1, track_id=?2, calculated_at=?3, gender=?4, age=?5, height_cm=?6, weight_kg=?7, activity_level=?8, goal=?9, bmi=?10, ibw=?11, abw=?12, bmr=?13, tee=?14, target_calories=?15, calorie_adjustment_percent=?16, protein_percent=?17, carb_percent=?18, fat_percent=?19, protein_g=?20, carb_g=?21, fat_g=?22, notes=?23, updated_at=?24 WHERE id=?25 AND client_id=?26",
             params![item.visit_id, track_id, calculated_at, item.gender, item.age, item.height_cm, item.weight_kg, item.activity_level, item.goal, item.bmi, item.ibw, item.abw, item.bmr, item.tee, item.target_calories, item.calorie_adjustment_percent, item.protein_percent, item.carb_percent, item.fat_percent, item.protein_g, item.carb_g, item.fat_g, item.notes, timestamp, id, item.client_id])
@@ -1947,14 +2217,18 @@ fn row_to_attachment(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> {
     })
 }
 
-fn client_folder(state: &AppState, client_id: i64) -> Result<PathBuf, String> {
-    let base = state
+fn client_folder_path(state: &AppState, client_id: i64) -> Result<PathBuf, String> {
+    Ok(state
         .db_path
         .parent()
         .ok_or_else(|| "مسیر داده‌های برنامه پیدا نشد.".to_string())?
         .join("DietoyData")
         .join("clients")
-        .join(format!("client-{client_id:06}"));
+        .join(format!("client-{client_id:06}")))
+}
+
+fn client_folder(state: &AppState, client_id: i64) -> Result<PathBuf, String> {
+    let base = client_folder_path(state, client_id)?;
     fs::create_dir_all(&base).map_err(|err| format!("ساخت پوشه مراجعه‌کننده انجام نشد: {err}"))?;
     for folder in ["profile", "visits", "body-analysis", "lab-results", "medical", "diet-plans", "device", "photos", "reports", "other"] {
         let _ = fs::create_dir_all(base.join(folder));
@@ -2023,7 +2297,7 @@ fn import_attachment_inner(
         .to_string();
     attachment.local_path = target.to_string_lossy().to_string();
     if attachment.attachment_date.is_empty() {
-        attachment.attachment_date = Utc::now().date_naive().to_string();
+        attachment.attachment_date = local_today();
     }
     conn.execute(
         "INSERT INTO attachments (client_id, visit_id, track_id, related_type, related_id, category, title, file_name, local_path, attachment_date, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
@@ -2704,7 +2978,7 @@ h2,h3,h4{break-after:avoid-page}tr,.metric,.file-card,.service-line{break-inside
         .replace("{{VISIT_CARDS}}", &visit_cards)
         .replace("{{ATTACHMENTS}}", &attachments_html)
         .replace("{{CLIENT_NOTES}}", &escape_html(non_empty(&client.notes, "یادداشتی ثبت نشده است.")))
-        .replace("{{GENERATED_AT}}", &Utc::now().date_naive().to_string()))
+        .replace("{{GENERATED_AT}}", &local_today()))
 }
 
 fn export_client_report_inner(state: &AppState, client_id: i64) -> Result<String, String> {
@@ -2768,6 +3042,75 @@ fn archive_client(state: tauri::State<'_, AppState>, id: i64, archived: bool) ->
     Ok(())
 }
 
+#[tauri::command]
+fn delete_client_permanently(state: tauri::State<'_, AppState>, id: i64) -> Result<String, String> {
+    let client = {
+        let conn = state.conn.lock().map_err(|err| err.to_string())?;
+        get_client(&conn, id)?
+    };
+
+    let original_folder = client_folder_path(&state, id)?;
+    let staged_folder = original_folder.with_file_name(format!(".deleting-client-{id}-{}", Utc::now().timestamp_millis()));
+    let assets_dir = state.db_path.parent().ok_or_else(|| "مسیر داده‌های برنامه پیدا نشد.".to_string())?.join("assets");
+    let profile_path = PathBuf::from(client.profile_image_path.trim());
+    let profile_owned_by_app = profile_path.is_file()
+        && profile_path.parent() == Some(assets_dir.as_path())
+        && profile_path.file_name().and_then(|value| value.to_str()).map(|name| name.starts_with("client-profile-")).unwrap_or(false);
+    let staged_profile = if profile_owned_by_app {
+        Some(profile_path.with_file_name(format!(".deleting-client-profile-{id}-{}", Utc::now().timestamp_millis())))
+    } else {
+        None
+    };
+
+    if original_folder.exists() {
+        fs::rename(&original_folder, &staged_folder)
+            .map_err(|err| format!("آماده‌سازی فایل‌های پرونده برای حذف انجام نشد: {err}"))?;
+    }
+    if let Some(staged) = staged_profile.as_ref() {
+        if let Err(error) = fs::rename(&profile_path, staged) {
+            if staged_folder.exists() { let _ = fs::rename(&staged_folder, &original_folder); }
+            return Err(format!("آماده‌سازی عکس پروفایل برای حذف انجام نشد: {error}"));
+        }
+    }
+
+    let delete_result = (|| -> Result<(), String> {
+        let mut conn = state.conn.lock().map_err(|err| err.to_string())?;
+        let tx = conn.transaction().map_err(|err| err.to_string())?;
+        let affected = tx.execute("DELETE FROM clients WHERE id=?1", params![id]).map_err(|err| err.to_string())?;
+        if affected == 0 { return Err("پرونده پیدا نشد.".to_string()); }
+        tx.commit().map_err(|err| err.to_string())?;
+        Ok(())
+    })();
+
+    if let Err(error) = delete_result {
+        if staged_folder.exists() { let _ = fs::rename(&staged_folder, &original_folder); }
+        if let Some(staged) = staged_profile.as_ref() {
+            if staged.exists() { let _ = fs::rename(staged, &profile_path); }
+        }
+        return Err(error);
+    }
+
+    let mut warnings = Vec::new();
+    if staged_folder.exists() {
+        if let Err(error) = fs::remove_dir_all(&staged_folder) {
+            warnings.push(format!("پوشه مخفی باقی ماند: {error}"));
+        }
+    }
+    if let Some(staged) = staged_profile.as_ref() {
+        if staged.exists() {
+            if let Err(error) = fs::remove_file(staged) {
+                warnings.push(format!("فایل عکس مخفی باقی ماند: {error}"));
+            }
+        }
+    }
+
+    if warnings.is_empty() {
+        Ok("پرونده و تمام داده‌ها و فایل‌های وابسته حذف شدند.".to_string())
+    } else {
+        Ok(format!("پرونده و داده‌های آن حذف شدند؛ پاک‌سازی فیزیکی کامل نبود: {}", warnings.join("؛ ")))
+    }
+}
+
 fn row_to_dashboard_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<DashboardVisitSummary> {
     Ok(DashboardVisitSummary {
         id: row.get(0)?,
@@ -2784,7 +3127,7 @@ fn row_to_dashboard_visit(row: &rusqlite::Row<'_>) -> rusqlite::Result<Dashboard
 #[tauri::command]
 fn dashboard_stats(state: tauri::State<'_, AppState>) -> Result<DashboardStats, String> {
     let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let today = Utc::now().date_naive();
+    let today = Local::now().date_naive();
     let today_iso = today.format("%Y-%m-%d").to_string();
     let next_week_iso = (today + Duration::days(7)).format("%Y-%m-%d").to_string();
     let month_prefix = today.format("%Y-%m").to_string();
@@ -3173,7 +3516,7 @@ fn export_data_backup(state: tauri::State<'_, AppState>) -> Result<String, Strin
         .map_err(|err| err.to_string())?;
 
     let mut records_stmt = conn
-        .prepare("SELECT * FROM client_records ORDER BY client_id ASC, record_date ASC, id ASC")
+        .prepare("SELECT id, client_id, record_date, weight_kg, height_cm, notes, created_at, updated_at FROM client_records ORDER BY client_id ASC, record_date ASC, id ASC")
         .map_err(|err| err.to_string())?;
     let records = records_stmt
         .query_map([], row_to_record)
@@ -3289,6 +3632,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             archive_client,
             change_credentials,
+            cleanup_auto_created_visits,
+            delete_client_permanently,
+            delete_visit,
             delete_visit_service,
             dashboard_stats,
             export_client_backup,
@@ -3298,6 +3644,7 @@ pub fn run() {
             export_data_backup,
             export_database,
             get_client_profile_bundle,
+            get_client_by_id,
             get_settings,
             get_visit_detail,
             import_brand_asset,
