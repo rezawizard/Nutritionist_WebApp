@@ -1,10 +1,10 @@
-Option Explicit
+﻿Option Explicit
 
 Dim shell, fso, folder, file, installer, command, appData, source, backupRoot, backupFolder
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 folder = fso.GetParentFolderName(WScript.ScriptFullName)
-installer = fso.BuildPath(folder, "Dietory-5.2.0-Setup.exe")
+installer = fso.BuildPath(folder, "Dietory-5.3.0-Setup.exe")
 
 If Not fso.FileExists(installer) Then
   installer = ""
@@ -19,7 +19,7 @@ If Not fso.FileExists(installer) Then
 End If
 
 If installer = "" Then
-  MsgBox "Setup file was not found. Keep INSTALL.vbs beside Dietory-5.2.0-Setup.exe.", vbCritical, "Dietory"
+  MsgBox "Setup file was not found. Keep INSTALL.vbs beside Dietory-5.3.0-Setup.exe.", vbCritical, "Dietory"
   WScript.Quit 1
 End If
 

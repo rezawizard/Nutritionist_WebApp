@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $releaseDir = Join-Path $root "release-usb"
 $bundleDir = Join-Path $root "src-tauri\target\release\bundle\nsis"
-$setupName = "Dietory-5.2.0-Setup.exe"
+$setupName = "Dietory-5.3.0-Setup.exe"
 $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
 Set-Location $root
@@ -22,7 +22,11 @@ if (-not $linker) {
   throw "link.exe was not found. Visual C++ tools are not completely installed yet."
 }
 
-npm.cmd install
+npm.cmd ci --no-audit --no-fund
+npm.cmd run build
+Push-Location (Join-Path $root "src-tauri")
+cargo check
+Pop-Location
 npm.cmd run tauri:build
 
 if (Test-Path $releaseDir) {
@@ -38,6 +42,9 @@ if (-not $setup) {
 Copy-Item $setup.FullName (Join-Path $releaseDir $setupName) -Force
 Copy-Item (Join-Path $PSScriptRoot "Customer-Install.vbs") (Join-Path $releaseDir "INSTALL.vbs") -Force
 Copy-Item (Join-Path $PSScriptRoot "Customer-Install-Silent.vbs") (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
+Copy-Item (Join-Path $PSScriptRoot "UPDATE-CURRENT-APP.vbs") $releaseDir -Force
+Copy-Item (Join-Path $PSScriptRoot "UNINSTALL-CURRENT-APP.vbs") $releaseDir -Force
+Copy-Item (Join-Path $PSScriptRoot "START-HERE-DIETORY.hta") $releaseDir -Force
 Copy-Item (Join-Path $PSScriptRoot "README-USB.txt") $releaseDir -Force
 $guidePath = Join-Path $root "docs\Dietory_User_Guide_FA.pdf"
 if (Test-Path $guidePath) { Copy-Item $guidePath (Join-Path $releaseDir "Dietory-Guide-FA.pdf") -Force }
@@ -47,4 +54,4 @@ Write-Host "USB package is ready:"
 Write-Host $releaseDir
 Write-Host ""
 Write-Host "Copy the whole release-usb folder to the flash drive."
-Write-Host "Customer should double-click INSTALL.vbs."
+Write-Host "Customer should double-click START-HERE-DIETORY.hta."
