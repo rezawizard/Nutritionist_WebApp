@@ -1,5 +1,5 @@
-name: USE THIS - Dietory 5.0.0 Final Installer
-run-name: USE THIS - Dietory 5.0.0 Final Installer · ${{ github.ref_name }} · ${{ github.sha }}
+name: USE THIS - Dietory 5.1.0 Final Installer
+run-name: USE THIS - Dietory 5.1.0 Final Installer · ${{ github.ref_name }} · ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build Dietory 5.0.0 customer package
+    name: Build Dietory 5.1.0 customer package
     runs-on: windows-latest
 
     steps:
@@ -67,7 +67,7 @@ jobs:
             if (Test-Path $bundleDir) { Get-ChildItem -Path $bundleDir -Recurse }
             throw "NSIS setup EXE was not found."
           }
-          Copy-Item $setup.FullName (Join-Path $releaseDir "Dietory-5.0.0-Setup.exe") -Force
+          Copy-Item $setup.FullName (Join-Path $releaseDir "Dietory-5.1.0-Setup.exe") -Force
           Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
           Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
           Copy-Item "installer\README-USB.txt" $releaseDir -Force
@@ -82,11 +82,11 @@ jobs:
 
           "branch=${{ github.ref_name }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8
           "commit=${{ github.sha }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
-          "version=5.0.0" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
+          "version=5.1.0" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
           Get-ChildItem $releaseDir
 
       - name: Upload release-usb artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dietory-5.0.0-release
+          name: dietory-5.1.0-release
           path: release-usb
