@@ -2084,10 +2084,12 @@ fn list_device_catalog(state: tauri::State<'_, AppState>, active_only: bool) -> 
         "SELECT id, name, rental_percent, active, description FROM device_catalog ORDER BY active DESC, name ASC, id ASC"
     };
     let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
-    stmt.query_map([], row_to_device_catalog_item)
+    let rows = stmt
+        .query_map([], row_to_device_catalog_item)
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.to_string())
+        .map_err(|err| err.to_string())?;
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -3545,9 +3547,17 @@ fn monthly_report(state: tauri::State<'_, AppState>, start_date: String, end_dat
             "SELECT s.service_group_snapshot, COUNT(*), COALESCE(SUM(s.quantity),0), COALESCE(SUM(s.total),0) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} GROUP BY s.service_group_snapshot ORDER BY SUM(s.total) DESC, s.service_group_snapshot ASC"
         );
         let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
-        stmt.query_map(params![&start_date, &end_date], |row| Ok(MonthlyServiceGroupRow {
-            group_key: row.get(0)?, cases: row.get(1)?, quantity: row.get(2)?, revenue: row.get(3)?,
-        })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?
+        let rows = stmt
+            .query_map(params![&start_date, &end_date], |row| Ok(MonthlyServiceGroupRow {
+                group_key: row.get(0)?,
+                cases: row.get(1)?,
+                quantity: row.get(2)?,
+                revenue: row.get(3)?,
+            }))
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        rows
     };
 
     let devices = {
@@ -3555,9 +3565,23 @@ fn monthly_report(state: tauri::State<'_, AppState>, start_date: String, end_dat
             "SELECT s.device_id, CASE WHEN TRIM(s.device_name)='' THEN 'بدون نام دستگاه' ELSE s.device_name END, s.service_name_snapshot, CASE WHEN TRIM(s.body_area)='' THEN 'ناحیه ثبت نشده' ELSE s.body_area END, COUNT(DISTINCT v.id), COALESCE(SUM(s.quantity),0), COALESCE(SUM(COALESCE(s.duration_minutes,0) * s.quantity),0), COALESCE(SUM(s.total),0), COALESCE(s.device_rental_percent_snapshot,0), COALESCE(SUM(s.total * COALESCE(s.device_rental_percent_snapshot,0) / 100.0),0) FROM visits v JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND s.service_group_snapshot='device' GROUP BY s.device_id, s.device_name, s.service_name_snapshot, s.body_area, COALESCE(s.device_rental_percent_snapshot,0) ORDER BY s.device_name ASC, SUM(s.total) DESC"
         );
         let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
-        stmt.query_map(params![&start_date, &end_date], |row| Ok(MonthlyDeviceUsageRow {
-            device_id: row.get(0)?, device_name: row.get(1)?, service_name: row.get(2)?, body_area: row.get(3)?, cases: row.get(4)?, quantity: row.get(5)?, total_minutes: row.get(6)?, revenue: row.get(7)?, rental_percent: row.get(8)?, rental_due: row.get(9)?,
-        })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?
+        let rows = stmt
+            .query_map(params![&start_date, &end_date], |row| Ok(MonthlyDeviceUsageRow {
+                device_id: row.get(0)?,
+                device_name: row.get(1)?,
+                service_name: row.get(2)?,
+                body_area: row.get(3)?,
+                cases: row.get(4)?,
+                quantity: row.get(5)?,
+                total_minutes: row.get(6)?,
+                revenue: row.get(7)?,
+                rental_percent: row.get(8)?,
+                rental_due: row.get(9)?,
+            }))
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        rows
     };
 
     let device_cases_detail = {
@@ -3565,9 +3589,24 @@ fn monthly_report(state: tauri::State<'_, AppState>, start_date: String, end_dat
             "SELECT v.id, v.visit_date, c.id, c.full_name, CASE WHEN TRIM(s.device_name)='' THEN 'بدون نام دستگاه' ELSE s.device_name END, s.service_name_snapshot, CASE WHEN TRIM(s.body_area)='' THEN 'ناحیه ثبت نشده' ELSE s.body_area END, s.quantity, s.total, COALESCE(s.device_rental_percent_snapshot,0), s.total * COALESCE(s.device_rental_percent_snapshot,0) / 100.0 FROM visits v JOIN clients c ON c.id=v.client_id JOIN visit_services s ON s.visit_id=v.id WHERE v.visit_date BETWEEN ?1 AND ?2 AND {actual_condition} AND s.service_group_snapshot='device' ORDER BY v.visit_date ASC, v.id ASC, s.id ASC"
         );
         let mut stmt = conn.prepare(&sql).map_err(|err| err.to_string())?;
-        stmt.query_map(params![&start_date, &end_date], |row| Ok(MonthlyDeviceCaseRow {
-            visit_id: row.get(0)?, visit_date: row.get(1)?, client_id: row.get(2)?, client_name: row.get(3)?, device_name: row.get(4)?, service_name: row.get(5)?, body_area: row.get(6)?, quantity: row.get(7)?, revenue: row.get(8)?, rental_percent: row.get(9)?, rental_due: row.get(10)?,
-        })).map_err(|err| err.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?
+        let rows = stmt
+            .query_map(params![&start_date, &end_date], |row| Ok(MonthlyDeviceCaseRow {
+                visit_id: row.get(0)?,
+                visit_date: row.get(1)?,
+                client_id: row.get(2)?,
+                client_name: row.get(3)?,
+                device_name: row.get(4)?,
+                service_name: row.get(5)?,
+                body_area: row.get(6)?,
+                quantity: row.get(7)?,
+                revenue: row.get(8)?,
+                rental_percent: row.get(9)?,
+                rental_due: row.get(10)?,
+            }))
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        rows
     };
 
     Ok(MonthlyReport {
