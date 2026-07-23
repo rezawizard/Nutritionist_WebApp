@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
   Activity,
+  BarChart3,
   Calculator,
   Camera,
   CalendarCheck,
@@ -81,8 +82,9 @@ import {
   parseDietMeals,
   dietMealTotals,
   visitModeDefaultLabels,
+  jalaliMonthRangeToIso,
 } from "./lib";
-import type { ActivityLevel, Attachment, AttachmentCategory, CareTrack, CareTrackType, Client, ClientProfileBundle, DashboardStats, DietMeal, DietPlan, ExtendedMeasurements, Gender, Goal, NutritionCalculation, Screen, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitModeOption, VisitService, VisitType } from "./types";
+import type { ActivityLevel, Attachment, AttachmentCategory, CareTrack, CareTrackType, Client, ClientProfileBundle, DashboardStats, DeviceCatalogItem, DietMeal, DietPlan, ExtendedMeasurements, Gender, Goal, MonthlyReport, NutritionCalculation, Screen, SecurityStatus, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitModeOption, VisitService, VisitType } from "./types";
 import type { ClientRecord } from "./types";
 import BodyAnalysisViewer from "./components/BodyAnalysisViewer";
 import ClientTrendChart from "./components/ClientTrendChart";
@@ -103,6 +105,8 @@ const defaultSettings: Settings = {
   diet_plan_show_macros: true,
   diet_plan_show_calories: true,
   report_show_contact: true,
+  reports_completed_only: true,
+  reports_use_service_revenue: true,
   ...defaultCalculationSettings,
 };
 
@@ -167,6 +171,13 @@ const emptyServiceEditor: ServiceCatalogItem = {
 const emptyVisitModeEditor: VisitModeOption = {
   key: "",
   name: "",
+  active: true,
+  description: "",
+};
+
+const emptyDeviceEditor: DeviceCatalogItem = {
+  name: "",
+  rental_percent: 0,
   active: true,
   description: "",
 };
@@ -412,12 +423,14 @@ function useToasts() {
 
 export default function App() {
   const [unlocked, setUnlocked] = useState(false);
+  const [mustChangeCredentials, setMustChangeCredentials] = useState(false);
   const [screen, setScreen] = useState<Screen>("dashboard");
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [editing, setEditing] = useState<Client | null>(null);
   const [calculatorClient, setCalculatorClient] = useState<Client | null>(null);
   const [version, setVersion] = useState(0);
   const [focusClientSearchVersion, setFocusClientSearchVersion] = useState(0);
+  const [clientListPreset, setClientListPreset] = useState<"active" | "all" | null>(null);
   const { toasts, push } = useToasts();
 
   useEffect(() => {
@@ -441,8 +454,21 @@ export default function App() {
     setScreen("calculator");
   };
 
+  const openClients = (preset: "active" | "all" | null = null, focusSearch = false) => {
+    setClientListPreset(preset);
+    setScreen("clients");
+    if (focusSearch) setFocusClientSearchVersion((value) => value + 1);
+  };
+
   if (!unlocked) {
-    return <LoginScreen settings={settings} onLogin={() => setUnlocked(true)} toast={push} toasts={toasts} />;
+    return <LoginScreen settings={settings} onLogin={(status) => { setUnlocked(true); setMustChangeCredentials(status.must_change_credentials); }} toast={push} toasts={toasts} />;
+  }
+
+  if (mustChangeCredentials) {
+    return <ForcedCredentialChange settings={settings} toast={push} toasts={toasts} onCompleted={(username) => {
+      setSettings((current) => ({ ...current, username }));
+      setMustChangeCredentials(false);
+    }} />;
   }
 
   return (
@@ -452,8 +478,9 @@ export default function App() {
           <Brand settings={settings} />
           <nav className="mt-9 grid gap-2">
             <NavItem active={screen === "dashboard"} icon={Home} label="داشبورد" onClick={() => setScreen("dashboard")} />
-            <NavItem active={screen === "clients" || screen === "client-form"} icon={Users} label="مراجعین" onClick={() => setScreen("clients")} />
+            <NavItem active={screen === "clients" || screen === "client-form"} icon={Users} label="مراجعین" onClick={() => openClients(null)} />
             <NavItem active={screen === "calculator"} icon={Calculator} label="محاسبات تغذیه" onClick={() => openCalculator()} />
+            <NavItem active={screen === "reports"} icon={BarChart3} label="گزارش‌های ماهانه" onClick={() => setScreen("reports")} />
             <NavItem active={screen === "settings"} icon={SettingsIcon} label="تنظیمات" onClick={() => setScreen("settings")} />
           </nav>
           <div className="absolute bottom-6 left-5 right-5">
@@ -469,9 +496,10 @@ export default function App() {
               settings={settings}
               onNew={() => openClientForm()}
               onPrevious={() => {
-                setScreen("clients");
-                setFocusClientSearchVersion((value) => value + 1);
+                openClients("active", true);
               }}
+              onActiveClients={() => openClients("active")}
+              onAllClients={() => openClients("all")}
               onCalculator={() => openCalculator()}
               onEdit={openClientForm}
             />
@@ -480,6 +508,7 @@ export default function App() {
             <Clients
               version={version}
               focusSearchVersion={focusClientSearchVersion}
+              preset={clientListPreset}
               onNew={() => openClientForm()}
               onEdit={openClientForm}
               onCalculate={openCalculator}
@@ -504,6 +533,7 @@ export default function App() {
             />
           )}
           {screen === "calculator" && <CalculatorScreen initialClient={calculatorClient} settings={settings} toast={push} />}
+          {screen === "reports" && <ReportsScreen version={version} toast={push} />}
           {screen === "settings" && (
             <SettingsScreen
               settings={settings}
@@ -561,18 +591,19 @@ function NavItem({ active, icon: Icon, label, onClick }: { active: boolean; icon
 function MobileNav({ screen, setScreen, openCalculator }: { screen: Screen; setScreen: (screen: Screen) => void; openCalculator: () => void }) {
   const item = "grid h-11 place-items-center rounded-control border border-warm-100 bg-paper text-warm-500";
   return (
-    <div className="mb-5 grid grid-cols-4 gap-2 lg:hidden">
+    <div className="mb-5 grid grid-cols-5 gap-2 lg:hidden">
       <button className={cn(item, screen === "dashboard" && "bg-[var(--primary)] text-white")} onClick={() => setScreen("dashboard")} aria-label="داشبورد"><Home size={20} /></button>
       <button className={cn(item, (screen === "clients" || screen === "client-form") && "bg-[var(--primary)] text-white")} onClick={() => setScreen("clients")} aria-label="مراجعین"><Users size={20} /></button>
       <button className={cn(item, screen === "calculator" && "bg-[var(--primary)] text-white")} onClick={openCalculator} aria-label="محاسبات تغذیه"><Calculator size={20} /></button>
+      <button className={cn(item, screen === "reports" && "bg-[var(--primary)] text-white")} onClick={() => setScreen("reports")} aria-label="گزارش‌ها"><BarChart3 size={20} /></button>
       <button className={cn(item, screen === "settings" && "bg-[var(--primary)] text-white")} onClick={() => setScreen("settings")} aria-label="تنظیمات"><SettingsIcon size={20} /></button>
     </div>
   );
 }
 
-function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings; onLogin: () => void; toast: ToastFn; toasts: Toast[] }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin");
+function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings; onLogin: (status: SecurityStatus) => void; toast: ToastFn; toasts: Toast[] }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
 
   const submit = async (event: React.FormEvent) => {
@@ -580,12 +611,17 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
     setLoading(true);
     try {
       if (!isDesktopRuntime()) {
-        if (username === "admin" && password === "admin") onLogin();
+        if (username === "admin" && password === "admin") onLogin({ username: "admin", must_change_credentials: false });
         else toast("نام کاربری یا رمز عبور درست نیست.", "error");
         return;
       }
       const ok = await invoke<boolean>("login", { input: { username, password } });
-      ok ? onLogin() : toast("نام کاربری یا رمز عبور درست نیست.", "error");
+      if (ok) {
+        const status = await invoke<SecurityStatus>("get_security_status");
+        onLogin(status);
+      } else {
+        toast("نام کاربری یا رمز عبور درست نیست.", "error");
+      }
     } catch (error) {
       toast(getErrorMessage(error, "ورود انجام نشد."), "error");
     } finally {
@@ -606,9 +642,8 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
                 <p className="mt-5 max-w-sm text-sm leading-8 text-white/85">پرونده‌ها، محاسبات، بادی آنالیز و برنامه‌های غذایی در یک فضای آرام، سریع و خصوصی مدیریت می‌شوند.</p>
               </div>
               <div className="rounded-card border border-white/14 bg-white/10 p-5">
-                <p className="text-sm font-semibold">ورود اولیه</p>
-                <p className="numbers mt-3 text-2xl font-bold">admin / admin</p>
-                <p className="mt-2 text-xs leading-6 text-white/70">بعد از ورود از تنظیمات رمز را تغییر دهید.</p>
+                <p className="text-sm font-semibold">ورود محافظت‌شده</p>
+                <p className="mt-3 text-sm leading-7 text-white/80">اطلاعات ورود روی همین دستگاه نگهداری می‌شود. در اولین استفاده، رمز اولیه تحویل‌شده را وارد کنید.</p>
               </div>
             </div>
           </div>
@@ -629,7 +664,26 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
   );
 }
 
-function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit }: { version: number; settings: Settings; onNew: () => void; onPrevious: () => void; onCalculator: () => void; onEdit: (client: Client) => void }) {
+function ForcedCredentialChange({ settings, toast, toasts, onCompleted }: { settings: Settings; toast: ToastFn; toasts: Toast[]; onCompleted: (username: string) => void }) {
+  const [form, setForm] = useState({ current_password: "", username: settings.username || "admin", password: "", repeat: "" });
+  const [loading, setLoading] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (form.password !== form.repeat) { toast("تکرار رمز با رمز جدید یکسان نیست.", "error"); return; }
+    if (form.password.length < 8) { toast("رمز جدید باید حداقل ۸ نویسه باشد.", "error"); return; }
+    setLoading(true);
+    try {
+      await invoke("change_credentials", { input: { current_password: form.current_password, username: form.username, password: form.password } });
+      toast("اطلاعات ورود امن ذخیره شد.");
+      onCompleted(form.username.trim());
+    } catch (error) {
+      toast(getErrorMessage(error, "تغییر اطلاعات ورود انجام نشد."), "error");
+    } finally { setLoading(false); }
+  };
+  return <div className="login-shell min-h-screen bg-[var(--app-bg)]" dir="rtl" style={backgroundStyle(settings)}><main className="grid min-h-screen place-items-center px-5 py-8"><form onSubmit={submit} className="card w-full max-w-xl p-8"><div className="flex items-center gap-3"><ShieldCheck className="text-sage" size={30} /><div><h1 className="text-2xl font-extrabold">ایمن‌سازی ورود</h1><p className="helper mt-2">قبل از دسترسی به پرونده‌ها، نام کاربری و رمز اولیه را تغییر دهید.</p></div></div><div className="mt-7 grid gap-4"><PasswordField label="رمز فعلی" value={form.current_password} onChange={(value) => setForm({ ...form, current_password: value })} /><TextField label="نام کاربری جدید" value={form.username} onChange={(value) => setForm({ ...form, username: value })} /><PasswordField label="رمز جدید (حداقل ۸ نویسه)" value={form.password} onChange={(value) => setForm({ ...form, password: value })} /><PasswordField label="تکرار رمز جدید" value={form.repeat} onChange={(value) => setForm({ ...form, repeat: value })} /></div><div className="mt-7"><PrimaryButton icon={ShieldCheck} type="submit" disabled={loading}>{loading ? "در حال ذخیره..." : "ذخیره و ورود"}</PrimaryButton></div></form></main><ToastStack toasts={toasts} /></div>;
+}
+
+function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit, onActiveClients, onAllClients }: { version: number; settings: Settings; onNew: () => void; onPrevious: () => void; onCalculator: () => void; onEdit: (client: Client) => void; onActiveClients: () => void; onAllClients: () => void }) {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [calendarMode, setCalendarMode] = useState<"today" | "week" | "month" | "exact" | "range" | "all">("today");
   const [exactDate, setExactDate] = useState(todayIsoDate());
@@ -671,13 +725,21 @@ function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit 
   }, [stats, calendarMode, exactDate, rangeStart, rangeEnd]);
 
   const dashboardIsEmpty = Boolean(stats && stats.total_clients === 0 && stats.visits_today === 0 && stats.upcoming_followups === 0);
+  const dietitianFirstName = settings.dietitian_name.trim().split(/\s+/)[0] || "";
+  const welcomeText = dietitianFirstName && settings.clinic_name.trim()
+    ? `${dietitianFirstName} جان، به ${settings.clinic_name.trim()} خوش آمدید.`
+    : dietitianFirstName
+      ? `${dietitianFirstName} جان، به سامانه یکپارچه مدیریت کلینیک تغذیه خوش آمدید.`
+      : settings.clinic_name.trim()
+        ? `به ${settings.clinic_name.trim()} خوش آمدید.`
+        : "به سامانه یکپارچه مدیریت کلینیک تغذیه خوش آمدید.";
 
   return (
     <>
-      <PageHeader
-        title="داشبورد روزانه"
-        subtitle={`امروز ${formatPersianDate()} است. این صفحه فقط کارهای عملیاتی روز را نشان می‌دهد و برای شروع سریع ویزیت طراحی شده است.`}
-      />
+      <header className="mb-7 motion-enter">
+        <h1 className="text-3xl font-extrabold leading-tight text-white md:text-4xl">امروز {formatPersianDate()} است.</h1>
+        <p className="mt-3 text-base font-semibold leading-8 text-white/85 md:text-lg">{welcomeText}</p>
+      </header>
       {dashboardError && <div className="mb-5"><ErrorSummary message={dashboardError} /></div>}
 
       <section className="daily-dashboard-grid motion-enter">
@@ -704,8 +766,8 @@ function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit 
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <Stat label="فعال" value={stats?.active_clients} icon={Leaf} hint="پرونده‌های در جریان" />
-          <Stat label="همه مراجعین" value={stats?.total_clients} icon={Users} hint="کل پرونده‌ها" />
+          <Stat label="فعال" value={stats?.active_clients} icon={Leaf} hint="پرونده‌های در جریان" onClick={onActiveClients} />
+          <Stat label="همه مراجعین" value={stats?.total_clients} icon={Users} hint="کل پرونده‌ها" onClick={onAllClients} />
         </div>
       </section>
 
@@ -773,13 +835,19 @@ function DashboardVisitRow({ visit }: { visit: DashboardStats["upcoming_visits"]
 }
 
 
-function Clients({ version, focusSearchVersion, onNew, onEdit, onCalculate, onChanged, toast }: { version: number; focusSearchVersion: number; onNew: () => void; onEdit: (client: Client) => void; onCalculate: (client: Client) => void; onChanged: () => void; toast: ToastFn }) {
+function Clients({ version, focusSearchVersion, preset, onNew, onEdit, onCalculate, onChanged, toast }: { version: number; focusSearchVersion: number; preset: "active" | "all" | null; onNew: () => void; onEdit: (client: Client) => void; onCalculate: (client: Client) => void; onChanged: () => void; toast: ToastFn }) {
   const [clients, setClients] = useState<Client[] | null>(null);
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [goalFilter, setGoalFilter] = useState<ClientGoalFilter>("all");
   const [mode, setMode] = useState<"new" | "returning">("returning");
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (preset === "active") setIncludeArchived(false);
+    if (preset === "all") setIncludeArchived(true);
+    if (preset) setMode("returning");
+  }, [preset]);
 
   useEffect(() => {
     if (focusSearchVersion <= 0) return;
@@ -905,6 +973,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
   const [visits, setVisits] = useState<VisitDetail[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
+  const [deviceCatalog, setDeviceCatalog] = useState<DeviceCatalogItem[]>([]);
   const [visitModes, setVisitModes] = useState<VisitModeOption[]>([]);
   const [nutritionCalculations, setNutritionCalculations] = useState<NutritionCalculation[]>([]);
   const [dietPlans, setDietPlans] = useState<DietPlan[]>([]);
@@ -927,7 +996,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
   const [visitSaving, setVisitSaving] = useState(false);
   const [visitRequestId, setVisitRequestId] = useState(makeVisitRequestId);
   const visitFormRef = useRef<HTMLDivElement>(null);
-  const [serviceForm, setServiceForm] = useState({ groupKey: "diet" as ServiceGroup, visitId: "", catalogId: "", quantity: 1, price: 0, body_area: "", device_name: "", notes: "" });
+  const [serviceForm, setServiceForm] = useState({ editingId: null as number | null, groupKey: "diet" as ServiceGroup, visitId: "", catalogId: "", deviceId: "", quantity: 1, price: 0, body_area: "", device_name: "", notes: "" });
   const [attachmentForm, setAttachmentForm] = useState({ category: "other" as AttachmentCategory, title: "", notes: "" });
   const [visitForm, setVisitForm] = useState({
     visit_date: todayIsoDate(),
@@ -985,6 +1054,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
       setVisits([]);
       setAttachments([]);
       setServiceCatalog([]);
+      setDeviceCatalog([]);
       setVisitModes([]);
       setNutritionCalculations([]);
       setDietPlans([]);
@@ -1001,10 +1071,11 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
 
     const loadProfile = async () => {
       try {
-        const [bundle, catalog, modes] = await Promise.all([
+        const [bundle, catalog, modes, devices] = await Promise.all([
           invoke<ClientProfileBundle>("get_client_profile_bundle", { clientId: client.id }),
-          invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: true }),
+          invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false }),
           invoke<VisitModeOption[]>("list_visit_modes", { activeOnly: true }),
+          invoke<DeviceCatalogItem[]>("list_device_catalog", { activeOnly: false }),
         ]);
         if (cancelled) return;
 
@@ -1020,6 +1091,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
         setTargetWeightDraft(dietTrack?.target_weight ? String(dietTrack.target_weight) : "");
         setVisitServices(Object.fromEntries(bundle.visits.filter((item) => item.visit.id).map((item) => [item.visit.id!, item.services])));
         setServiceCatalog(catalog);
+        setDeviceCatalog(devices);
         setVisitModes(modes.length ? modes : [{ key: "in_person", name: "حضوری", active: true }, { key: "online", name: "آنلاین", active: true }]);
 
         const latestItem = visitDetails[visitDetails.length - 1];
@@ -1267,8 +1339,23 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
     }
   };
 
+  const deleteAttachmentItem = async (attachment: Attachment) => {
+    if (!attachment.id) return;
+    if (!window.confirm(`فایل «${attachment.title || attachment.file_name}» از پرونده حذف شود؟ این اقدام فایل ذخیره‌شده را نیز پاک می‌کند.`)) return;
+    try {
+      await invoke("delete_attachment", { attachmentId: attachment.id });
+      setAttachments((items) => items.filter((item) => item.id !== attachment.id));
+      toast("فایل از پرونده حذف شد.");
+    } catch (error) {
+      toast(getErrorMessage(error, "حذف فایل انجام نشد."), "error");
+    }
+  };
 
-  const filteredServiceCatalog = serviceCatalog.filter((item) => (item.group_key ?? "other") === serviceForm.groupKey && item.active !== false);
+  const filteredServiceCatalog = serviceCatalog.filter((item) =>
+    (item.group_key ?? "other") === serviceForm.groupKey
+    && (item.active !== false || String(item.id ?? "") === serviceForm.catalogId)
+  );
+  const selectableDevices = deviceCatalog.filter((item) => item.active !== false || String(item.id ?? "") === serviceForm.deviceId);
   const selectedCatalogItem = serviceCatalog.find((entry) => String(entry.id ?? "") === serviceForm.catalogId);
 
   const selectServiceGroup = (groupKey: ServiceGroup) => {
@@ -1279,6 +1366,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
       catalogId: first?.id ? String(first.id) : "",
       price: first?.default_price ?? 0,
       body_area: "",
+      deviceId: "",
       device_name: "",
     }));
   };
@@ -1304,14 +1392,22 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
     try {
       const quantity = Number.isFinite(serviceForm.quantity) && serviceForm.quantity > 0 ? serviceForm.quantity : 1;
       const price = Number.isFinite(serviceForm.price) ? serviceForm.price : 0;
+      const selectedDevice = deviceCatalog.find((item) => String(item.id ?? "") === serviceForm.deviceId);
+      if (serviceForm.groupKey === "device" && !selectedDevice) {
+        toast("برای خدمت دستگاه، دستگاه را از فهرست تنظیمات انتخاب کنید.", "error");
+        return;
+      }
       const saved = await invoke<VisitService>("save_visit_service", {
         service: {
+          id: serviceForm.editingId,
           visit_id: visitId,
           service_id: catalogItem.id ?? null,
+          device_id: selectedDevice?.id ?? null,
           service_name_snapshot: catalogItem.name,
           service_group_snapshot: catalogItem.group_key ?? "other",
           body_area: serviceForm.body_area,
-          device_name: serviceForm.device_name,
+          device_name: selectedDevice?.name ?? "",
+          device_rental_percent_snapshot: selectedDevice?.rental_percent ?? 0,
           duration_minutes: catalogItem.default_duration_minutes ?? null,
           price,
           quantity,
@@ -1319,13 +1415,36 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
           notes: serviceForm.notes,
         },
       });
-      setVisitServices((current) => ({ ...current, [visitId]: [...(current[visitId] ?? []), saved] }));
-      setServiceForm((current) => ({ ...current, body_area: "", device_name: "", notes: "" }));
-      toast("خدمت برای ویزیت ثبت شد.");
+      setVisitServices((current) => {
+        const next = Object.fromEntries(Object.entries(current).map(([key, items]) => [key, items.filter((item) => item.id !== saved.id)])) as Record<number, VisitService[]>;
+        const targetItems = next[saved.visit_id] ?? [];
+        return { ...next, [saved.visit_id]: [...targetItems, saved] };
+      });
+      setServiceForm((current) => ({ ...current, editingId: null, body_area: "", deviceId: "", device_name: "", notes: "" }));
+      toast(serviceForm.editingId ? "خدمت ویرایش شد." : "خدمت برای ویزیت ثبت شد.");
     } catch (error) {
       toast(getErrorMessage(error, "ثبت خدمت انجام نشد."), "error");
     }
   };
+
+  const editVisitService = (service: VisitService) => {
+    const catalog = serviceCatalog.find((item) => item.id === service.service_id) ?? serviceCatalog.find((item) => item.name === service.service_name_snapshot);
+    setServiceForm({
+      editingId: service.id ?? null,
+      groupKey: (service.service_group_snapshot ?? catalog?.group_key ?? "other") as ServiceGroup,
+      visitId: String(service.visit_id),
+      catalogId: catalog?.id ? String(catalog.id) : "",
+      deviceId: service.device_id ? String(service.device_id) : "",
+      quantity: service.quantity,
+      price: service.price,
+      body_area: service.body_area,
+      device_name: service.device_name,
+      notes: service.notes,
+    });
+    setActiveTab("services");
+  };
+
+  const cancelServiceEdit = () => setServiceForm((current) => ({ ...current, editingId: null, body_area: "", deviceId: "", device_name: "", notes: "" }));
 
   const baseProfileCalculation = calculateNutrition(form);
   const profileCalorieAdjustmentPercent = Number(profileCalcOverrides.calorieAdjustmentPercent) || 0;
@@ -1462,6 +1581,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
   };
   const deleteVisitService = async (service: VisitService) => {
     if (!service.id) return;
+    if (!window.confirm(`خدمت «${service.service_name_snapshot}» از این ویزیت حذف شود؟`)) return;
     try {
       await invoke("delete_visit_service", { id: service.id });
       setVisitServices((current) => ({ ...current, [service.visit_id]: (current[service.visit_id] ?? []).filter((item) => item.id !== service.id) }));
@@ -1762,13 +1882,16 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
         {attachments.length === 0 ? <EmptyState icon={FileUp} title="فایلی ثبت نشده" text="از دکمه افزودن فایل استفاده کنید." /> : (
           <div className="grid gap-3">
             {attachments.map((attachment) => (
-              <button key={attachment.id ?? attachment.local_path} type="button" onClick={() => openAttachment(attachment)} className="soft-transition rounded-control border border-warm-100 bg-warm-50 px-4 py-3 text-right hover:bg-white">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="font-semibold">{attachment.title || attachment.file_name}</span>
-                  <span className="text-xs text-olive">{attachmentCategoryLabels[attachment.category as AttachmentCategory] ?? attachment.category} · {attachment.attachment_date ? formatPersianDate(attachment.attachment_date) : ""}</span>
-                </div>
-                <p className="mt-2 truncate text-xs text-warm-500">{attachment.file_name}{attachment.notes ? ` · ${attachment.notes}` : ""}</p>
-              </button>
+              <div key={attachment.id ?? attachment.local_path} className="soft-transition flex items-center gap-2 rounded-control border border-warm-100 bg-warm-50 px-3 py-2 hover:bg-white">
+                <button type="button" onClick={() => openAttachment(attachment)} className="min-w-0 flex-1 px-1 py-1 text-right">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-semibold">{attachment.title || attachment.file_name}</span>
+                    <span className="text-xs text-olive">{attachmentCategoryLabels[attachment.category as AttachmentCategory] ?? attachment.category} · {attachment.attachment_date ? formatPersianDate(attachment.attachment_date) : ""}</span>
+                  </div>
+                  <p className="mt-2 truncate text-xs text-warm-500">{attachment.file_name}{attachment.notes ? ` · ${attachment.notes}` : ""}</p>
+                </button>
+                <button type="button" className="icon-close-button shrink-0 text-red-600" onClick={() => deleteAttachmentItem(attachment)} aria-label="حذف فایل"><Trash2 size={16} /></button>
+              </div>
             ))}
           </div>
         )}
@@ -1810,17 +1933,24 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
             <NumberField label="تعداد" value={serviceForm.quantity} onChange={(value) => setServiceForm({ ...serviceForm, quantity: value })} suffix="عدد" />
             <NumberField label="قیمت هر واحد" value={serviceForm.price} onChange={(value) => setServiceForm({ ...serviceForm, price: value })} suffix="تومان" />
             {(selectedCatalogItem?.body_area_required || serviceForm.groupKey === "device") && <TextField label="ناحیه بدن" value={serviceForm.body_area} onChange={(value) => setServiceForm({ ...serviceForm, body_area: value })} placeholder="مثلاً شکم، پهلو، ران" />}
-            {serviceForm.groupKey === "device" && <TextField label="نام دستگاه" value={serviceForm.device_name} onChange={(value) => setServiceForm({ ...serviceForm, device_name: value })} placeholder="اختیاری" />}
+            {serviceForm.groupKey === "device" && (selectableDevices.length > 0 ? (
+              <SelectField label="دستگاه" value={serviceForm.deviceId} onChange={(value) => setServiceForm({ ...serviceForm, deviceId: value })} options={{ "": "انتخاب دستگاه", ...Object.fromEntries(selectableDevices.map((item) => [String(item.id ?? ""), `${item.name}${item.active === false ? " (غیرفعال)" : ""} · سهم اجاره ${formatNumber(item.rental_percent)}٪`])) }} />
+            ) : (
+              <div className="rounded-control border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-7 text-amber-800">هنوز دستگاهی تعریف نشده است. ابتدا از «تنظیمات ← دستگاه‌ها و اجاره» دستگاه را اضافه کنید.</div>
+            ))}
             <div className="sm:col-span-2"><TextField label="یادداشت خدمت" value={serviceForm.notes} onChange={(value) => setServiceForm({ ...serviceForm, notes: value })} /></div>
           </div>
           {serviceForm.visitId && (visitServices[Number(serviceForm.visitId)] ?? []).length > 0 && (
             <div className="visit-service-cart">
               <div className="flex items-center justify-between"><strong>خدمات همین ویزیت</strong><span className="pill-soft">{formatNumber((visitServices[Number(serviceForm.visitId)] ?? []).reduce((sum, item) => sum + item.total, 0))} تومان</span></div>
-              <div className="mt-3 grid gap-2">{(visitServices[Number(serviceForm.visitId)] ?? []).map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-cart-row"><span><strong>{item.service_name_snapshot}</strong><small>{item.body_area || serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup]}</small></span><button type="button" onClick={() => deleteVisitService(item)} aria-label="حذف خدمت"><Trash2 size={16} /></button></div>)}</div>
+              <div className="mt-3 grid gap-2">{(visitServices[Number(serviceForm.visitId)] ?? []).map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-cart-row"><span><strong>{item.service_name_snapshot}</strong><small>{item.device_name || item.body_area || serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup]}</small></span><span className="flex items-center gap-1"><button type="button" onClick={() => editVisitService(item)} aria-label="ویرایش خدمت"><Pencil size={16} /></button><button type="button" onClick={() => deleteVisitService(item)} aria-label="حذف خدمت"><Trash2 size={16} /></button></span></div>)}</div>
             </div>
           )}
-          <PrimaryButton icon={Plus} onClick={saveVisitService}>افزودن به ویزیت</PrimaryButton>
-          <p className="helper">برای یک ویزیت می‌توانید بدون محدودیت چند خدمت از گروه‌های مختلف اضافه کنید.</p>
+          <div className="flex flex-wrap gap-2">
+            <PrimaryButton icon={serviceForm.editingId ? Save : Plus} onClick={saveVisitService}>{serviceForm.editingId ? "ذخیره ویرایش خدمت" : "افزودن به ویزیت"}</PrimaryButton>
+            {serviceForm.editingId && <SecondaryButton onClick={cancelServiceEdit}>انصراف از ویرایش</SecondaryButton>}
+          </div>
+          <p className="helper">برای یک ویزیت می‌توانید بدون محدودیت چند خدمت از گروه‌های مختلف اضافه یا موارد ثبت‌شده را ویرایش کنید.</p>
         </div>
       </div>
       <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter motion-delay-1">
@@ -1829,7 +1959,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
           {visits.slice().reverse().map((visit) => {
             const items = visit.visit.id ? visitServices[visit.visit.id] ?? [] : [];
             if (!items.length) return null;
-            return <div key={visit.visit.id} className="service-group-card"><div className="mb-3 flex items-center justify-between"><strong>{formatPersianDate(visit.visit.visit_date)}</strong><span className="text-xs text-warm-500">{visitTypeLabels[(visit.visit.visit_type ?? "initial") as VisitType]}</span></div><div className="grid gap-2">{items.map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-history-row"><span><strong>{item.service_name_snapshot}</strong><small>{serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup] ?? "سایر"}{item.body_area ? ` · ${item.body_area}` : ""}</small></span><span className="flex items-center gap-2"><b className="numbers">{formatNumber(item.total)} تومان</b><button type="button" className="icon-close-button" onClick={() => deleteVisitService(item)} aria-label="حذف خدمت"><Trash2 size={15} /></button></span></div>)}</div></div>;
+            return <div key={visit.visit.id} className="service-group-card"><div className="mb-3 flex items-center justify-between"><strong>{formatPersianDate(visit.visit.visit_date)}</strong><span className="text-xs text-warm-500">{visitTypeLabels[(visit.visit.visit_type ?? "initial") as VisitType]}</span></div><div className="grid gap-2">{items.map((item) => <div key={item.id ?? item.service_name_snapshot} className="service-history-row"><span><strong>{item.service_name_snapshot}</strong><small>{serviceGroupLabels[(item.service_group_snapshot ?? "other") as ServiceGroup] ?? "سایر"}{item.device_name ? ` · ${item.device_name}` : ""}{item.body_area ? ` · ${item.body_area}` : ""}</small></span><span className="flex items-center gap-2"><b className="numbers">{formatNumber(item.total)} تومان</b><button type="button" className="icon-close-button" onClick={() => editVisitService(item)} aria-label="ویرایش خدمت"><Pencil size={15} /></button><button type="button" className="icon-close-button" onClick={() => deleteVisitService(item)} aria-label="حذف خدمت"><Trash2 size={15} /></button></span></div>)}</div></div>;
           })}
           {Object.values(visitServices).flat().length === 0 && <EmptyState icon={ClipboardList} title="خدمتی ثبت نشده" text="بعد از ثبت ویزیت، گروه و آیتم خدمت را از فرم کنار صفحه انتخاب کنید." />}
         </div>
@@ -1952,11 +2082,13 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
   const requiresDiet = activeTrackSet.has("diet") || activeTrackSet.has("combined");
   const requiresBodyAnalysis = activeTrackSet.has("body_analysis") || activeTrackSet.has("combined");
   const requiresDevice = activeTrackSet.has("device") || activeTrackSet.has("combined");
+  const hasCompletedVisit = visits.some((item) => ["completed", "done"].includes(item.visit.status));
   const profileProgressItems = [
-    { label: "پرونده پایه ذخیره‌شده", done: Boolean(client?.id && form.full_name.trim()) },
-    { label: "مشخصات جسمانی پایه", done: form.age > 0 && form.height_cm > 0 && form.weight_kg > 0 },
-    { label: "هدف و سطح فعالیت", done: Boolean(form.goal && form.activity_level) },
-    { label: "اولین ویزیت واقعی", done: visits.length > 0 },
+    { label: "پرونده پایه ذخیره‌شده", done: Boolean(client?.id && form.full_name.trim()), tab: "base" as ProfileTab },
+    { label: "شماره تماس مراجع", done: Boolean(form.phone.trim()), tab: "base" as ProfileTab },
+    { label: "مشخصات جسمانی پایه", done: form.age > 0 && form.height_cm > 0 && form.weight_kg > 0, tab: "base" as ProfileTab },
+    { label: "هدف و سطح فعالیت", done: Boolean(form.goal && form.activity_level), tab: "base" as ProfileTab },
+    { label: "اولین ویزیت انجام‌شده", done: hasCompletedVisit, tab: "visits" as ProfileTab },
   ];
   const profilePathMilestones = [
     ...(requiresDiet ? [
@@ -1967,11 +2099,13 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
     ...(requiresDevice ? [{ label: "خدمت یا جلسه دستگاه", done: visits.some((item) => item.visit.visit_type === "device" || item.visit.visit_type === "combined") || allServices.some((item) => item.service_group_snapshot === "device") }] : []),
   ];
   const profileCompletion = Math.round(profileProgressItems.filter((item) => item.done).length / profileProgressItems.length * 100);
+  const incompleteProgressItems = profileProgressItems.filter((item) => !item.done);
   const summaryPanel = client?.id ? (
     <div className="grid gap-5">
       <section className="profile-hero-summary">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center"><ProfileAvatar client={form} size="lg" /><div className="flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-2xl font-extrabold">{form.full_name}</h2><span className="pill-soft">{goalLabels[form.goal]}</span>{form.archived && <span className="pill-soft">بایگانی</span>}</div><p className="helper mt-2">{form.phone || "شماره تماس ثبت نشده"} · {genderLabels[form.gender]} · {formatNumber(form.age)} سال</p><div className="mt-4 flex flex-wrap gap-2">{Array.from(activeTrackSet).length ? Array.from(activeTrackSet).map((track) => <button type="button" key={track} className="track-chip" onClick={() => { setActiveTrack(track); setActiveTab("tracks"); }}>{careTrackLabels[track]}</button>) : <span className="text-xs text-warm-500">مسیر فعال بعد از اولین ویزیت ساخته می‌شود.</span>}</div></div><div className="completion-orb"><strong>{formatNumber(profileCompletion)}٪</strong><span>تکمیل پایه</span></div></div>
         <div className="macro-progress mt-5"><span style={{ width: `${profileCompletion}%` }} /></div>
+        {incompleteProgressItems.length > 0 && <div className="mt-4 rounded-card border border-amber-200 bg-amber-50/80 p-4"><p className="text-sm font-bold text-amber-900">برای تکمیل ۱۰۰٪ پرونده:</p><div className="mt-3 flex flex-wrap gap-2">{incompleteProgressItems.map((item) => <button key={item.label} type="button" className="mini-action bg-white" onClick={() => setActiveTab(item.tab)}><ChevronLeft size={15} /> {item.label}</button>)}</div></div>}
       </section>
       <section className="summary-command-grid">
         <button onClick={() => setActiveTab("visits")}><CalendarCheck /><span><strong>ویزیت بعدی</strong><small>{latestVisit?.visit.next_visit_enabled && latestVisit.visit.next_visit_date ? `${formatPersianDate(latestVisit.visit.next_visit_date)} ${latestVisit.visit.next_visit_time || ""}` : "زمانی ثبت نشده"}</small></span></button>
@@ -1991,7 +2125,7 @@ function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { clie
       </section>
       <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="rounded-card border border-warm-100 bg-white p-5"><div className="flex items-center justify-between"><div><h3 className="font-bold">تصویر کامل وضعیت فعلی</h3><p className="helper mt-1">شاخص‌های اصلی برای تصمیم‌گیری سریع متخصص.</p></div><Target className="text-sage" /></div><div className="measurement-overview mt-5"><div><span>هدف اصلی</span><strong>{goalLabels[form.goal]}</strong></div><div><span>سطح فعالیت</span><strong>{activityLabels[form.activity_level]}</strong></div><div><span>کالری هدف</span><strong>{latestNutritionCalculation ? `${formatNumber(latestNutritionCalculation.target_calories)} kcal` : "—"}</strong></div><div><span>برنامه غذایی</span><strong>{dietPlans[0]?.title || "ثبت نشده"}</strong></div><div><span>فایل‌ها</span><strong>{formatNumber(attachments.length)} فایل</strong></div><div><span>خدمات</span><strong>{formatNumber(allServices.length)} مورد</strong></div></div></div>
-        <div className="rounded-card border border-warm-100 bg-warm-50 p-5"><div className="flex items-center gap-2"><Trophy className="text-sage" /><h3 className="font-bold">تکمیل پایه پرونده</h3></div><p className="helper mt-2">درصد فقط پرونده پایه و اولین ویزیت واقعی را می‌سنجد؛ مراحل درمان باعث کاهش یا افزایش ناگهانی این درصد نمی‌شوند.</p><div className="mt-4 grid gap-2">{profileProgressItems.map((item) => <div key={item.label} className={cn("achievement-row", item.done && "done")}><CheckCircle2 /> {item.label}</div>)}</div>{profilePathMilestones.length > 0 && <><div className="my-4 border-t border-warm-100" /><p className="text-xs font-bold text-warm-500">مراحل مسیر درمان (خارج از درصد)</p><div className="mt-3 grid gap-2">{profilePathMilestones.map((item) => <div key={item.label} className={cn("achievement-row", item.done && "done")}><CheckCircle2 /> {item.label}</div>)}</div></>}</div>
+        <div className="rounded-card border border-warm-100 bg-warm-50 p-5"><div className="flex items-center gap-2"><Trophy className="text-sage" /><h3 className="font-bold">تکمیل پایه پرونده</h3></div><p className="helper mt-2">درصد فقط پرونده پایه و اولین ویزیت انجام‌شده را می‌سنجد؛ مراحل درمان باعث کاهش یا افزایش ناگهانی این درصد نمی‌شوند.</p><div className="mt-4 grid gap-2">{profileProgressItems.map((item) => <button type="button" key={item.label} onClick={() => !item.done && setActiveTab(item.tab)} className={cn("achievement-row w-full text-right", item.done && "done")}><CheckCircle2 /> {item.label}</button>)}</div>{profilePathMilestones.length > 0 && <><div className="my-4 border-t border-warm-100" /><p className="text-xs font-bold text-warm-500">مراحل مسیر درمان (خارج از درصد)</p><div className="mt-3 grid gap-2">{profilePathMilestones.map((item) => <div key={item.label} className={cn("achievement-row", item.done && "done")}><CheckCircle2 /> {item.label}</div>)}</div></>}</div>
       </section>
       {form.notes && <section className="rounded-card border border-warm-100 bg-white p-5"><h3 className="font-bold">یادداشت مهم پرونده</h3><p className="mt-3 whitespace-pre-wrap text-sm leading-8 text-warm-500">{form.notes}</p></section>}
     </div>
@@ -2183,12 +2317,142 @@ function CalculatorScreen({ initialClient, settings, toast }: { initialClient: C
   );
 }
 
+function ReportsScreen({ version, toast }: { version: number; toast: ToastFn }) {
+  const todayParts = jalaliPartsFromIso(todayIsoDate());
+  const [period, setPeriod] = useState({ year: todayParts.jy, month: todayParts.jm });
+  const [report, setReport] = useState<MonthlyReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const loadReport = async () => {
+    const range = jalaliMonthRangeToIso(period.year, period.month);
+    setLoading(true);
+    setError("");
+    try {
+      const data = isDesktopRuntime()
+        ? await invoke<MonthlyReport>("monthly_report", { startDate: range.start, endDate: range.end })
+        : null;
+      setReport(data);
+    } catch (loadError) {
+      const message = getErrorMessage(loadError, "گزارش ماهانه خوانده نشد.");
+      setError(message);
+      toast(message, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadReport(); }, [period.year, period.month, version]);
+
+  const shiftMonth = (delta: number) => {
+    setPeriod((current) => {
+      let year = current.year;
+      let month = current.month + delta;
+      if (month < 1) { month = 12; year -= 1; }
+      if (month > 12) { month = 1; year += 1; }
+      return { year, month };
+    });
+  };
+
+  const summary = report?.summary;
+  const metrics = [
+    { label: "مراجع یکتا", value: summary?.unique_clients, hint: "افرادی که در این ماه خدمت واقعی دریافت کرده‌اند", icon: Users },
+    { label: "ویزیت انجام‌شده", value: summary?.completed_visits, hint: "جلسات تکمیل‌شده", icon: CheckCircle2 },
+    { label: "رژیم غذایی", value: summary?.diet_plans, hint: "برنامه‌های غذایی ثبت‌شده", icon: Utensils },
+    { label: "بادی آنالیز", value: summary?.body_analysis_cases, hint: "تعداد پرونده/جلسه دارای آنالیز بدن", icon: Activity },
+    { label: "استفاده از دستگاه", value: summary?.device_cases, hint: `${formatNumber(summary?.device_units ?? 0)} واحد/جلسه خدمت دستگاه`, icon: Sparkles },
+    { label: "مشاوره", value: summary?.consultations, hint: "جلسات یا خدمات مشاوره", icon: ClipboardList },
+    { label: "کل خدمات", value: summary?.services_count, hint: "ردیف‌های خدمت ثبت‌شده", icon: BarChart3 },
+    { label: "درآمد", value: summary?.total_revenue, hint: "تومان", icon: TrendingUp, money: true },
+    { label: "سهم اجاره دستگاه", value: summary?.device_rental_due, hint: "تومان قابل تسویه بر اساس درصد هر دستگاه", icon: Calculator, money: true },
+  ];
+
+  return (
+    <>
+      <PageHeader
+        title="گزارش ماهانه"
+        subtitle="نمای یکپارچه استفاده از دایتوری، خدمات کلینیک، بادی آنالیز، رژیم و سهم اجاره دستگاه‌ها."
+        action={<div className="flex flex-wrap gap-2"><SecondaryButton icon={RotateCcw} onClick={loadReport} disabled={loading}>{loading ? "در حال خواندن..." : "به‌روزرسانی"}</SecondaryButton><SecondaryButton icon={FileText} onClick={() => window.print()}>چاپ گزارش</SecondaryButton></div>}
+      />
+
+      <section className="card mb-5 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-lg font-bold">بازه گزارش</h2>
+            <p className="helper mt-2">ماه شمسی را انتخاب کنید. گزارش با تنظیمات مدیریتی فعلی محاسبه می‌شود.</p>
+          </div>
+          <div className="flex flex-wrap items-end gap-2">
+            <button type="button" className="mini-action h-11" onClick={() => shiftMonth(-1)}><ChevronRight size={17} /> ماه قبل</button>
+            <label className="grid gap-1 text-sm font-semibold text-warm-500"><span>ماه</span><select className="control min-w-36" value={period.month} onChange={(event) => setPeriod((current) => ({ ...current, month: Number(event.target.value) }))}>{persianMonthNames.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select></label>
+            <label className="grid gap-1 text-sm font-semibold text-warm-500"><span>سال</span><input className="control w-28 numbers" type="number" min="1300" max="1600" value={period.year} onChange={(event) => setPeriod((current) => ({ ...current, year: Number(event.target.value) || todayParts.jy }))} /></label>
+            <button type="button" className="mini-action h-11" onClick={() => shiftMonth(1)}>ماه بعد <ChevronLeft size={17} /></button>
+          </div>
+        </div>
+        {report && <div className="mt-4 flex flex-wrap gap-2 text-xs text-warm-500"><span className="pill-soft">از {formatPersianDate(report.start_date)} تا {formatPersianDate(report.end_date)}</span><span className="pill-soft">{report.completed_only ? "فقط ویزیت انجام‌شده" : "همه ویزیت‌های غیرلغوشده"}</span><span className="pill-soft">درآمد از {report.revenue_from_services ? "خدمات ثبت‌شده" : "مبلغ کل ویزیت"}</span></div>}
+      </section>
+
+      {error && <ErrorSummary message={error} />}
+      {loading && !report ? <SkeletonRows /> : (
+        <>
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {metrics.map((metric) => (
+              <div key={metric.label} className="metric-card card p-5">
+                <div className="mb-4 flex items-center justify-between text-warm-500"><span className="text-sm font-semibold">{metric.label}</span><span className="grid h-9 w-9 place-items-center rounded-control bg-warm-50 text-olive"><metric.icon size={20} /></span></div>
+                <p className="metric-value text-charcoal">{report ? formatNumber(metric.value ?? 0) : "—"}</p>
+                <p className="mt-3 text-xs leading-6 text-warm-500">{metric.money ? `${metric.hint}` : metric.hint}</p>
+              </div>
+            ))}
+          </section>
+
+          <section className="mt-5 grid gap-5 xl:grid-cols-[0.75fr_1.25fr]">
+            <div className="card p-5">
+              <div className="flex items-center justify-between"><h2 className="text-lg font-bold">تفکیک خدمات</h2><span className="pill-soft">{formatNumber(report?.service_groups.length ?? 0)} گروه</span></div>
+              {!report?.service_groups.length ? <EmptyState icon={ClipboardList} title="خدمتی در این ماه ثبت نشده" text="پس از ثبت خدمات ویزیت، تفکیک گروهی اینجا نمایش داده می‌شود." /> : <div className="mt-4 grid gap-2">{report.service_groups.map((row) => <div key={row.group_key} className="service-settings-row"><div><strong>{serviceGroupLabels[row.group_key as ServiceGroup] ?? row.group_key}</strong><small>{formatNumber(row.cases)} ردیف · {formatNumber(row.quantity)} واحد</small></div><b className="numbers">{formatNumber(row.revenue)} تومان</b></div>)}</div>}
+            </div>
+
+            <div className="card overflow-hidden p-5">
+              <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-bold">گزارش تفصیلی دستگاه</h2><p className="helper mt-2">مبنای تسویه اجاره: مبلغ هر خدمت × درصد ثبت‌شده دستگاه در زمان ارائه خدمت.</p></div><span className="pill-soft">{formatNumber(report?.devices.length ?? 0)} ردیف</span></div>
+              {!report?.devices.length ? <EmptyState icon={Activity} title="استفاده‌ای از دستگاه ثبت نشده" text="دستگاه را در تنظیمات تعریف و هنگام ثبت خدمت انتخاب کنید." /> : (
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full min-w-[900px] text-right text-sm">
+                    <thead className="border-b border-warm-100 text-xs text-warm-500"><tr><th className="px-3 py-3">دستگاه</th><th className="px-3 py-3">خدمت</th><th className="px-3 py-3">ناحیه</th><th className="px-3 py-3">مورد</th><th className="px-3 py-3">تعداد</th><th className="px-3 py-3">مدت</th><th className="px-3 py-3">درآمد</th><th className="px-3 py-3">درصد</th><th className="px-3 py-3">سهم اجاره</th></tr></thead>
+                    <tbody>{report.devices.map((row, index) => <tr key={`${row.device_id ?? row.device_name}-${row.service_name}-${row.body_area}-${index}`} className="border-b border-warm-50"><td className="px-3 py-3 font-semibold">{row.device_name}</td><td className="px-3 py-3">{row.service_name}</td><td className="px-3 py-3">{row.body_area}</td><td className="px-3 py-3 numbers">{formatNumber(row.cases)}</td><td className="px-3 py-3 numbers">{formatNumber(row.quantity)}</td><td className="px-3 py-3 numbers">{formatNumber(row.total_minutes)} دقیقه</td><td className="px-3 py-3 numbers">{formatNumber(row.revenue)}</td><td className="px-3 py-3 numbers">{formatNumber(row.rental_percent)}٪</td><td className="px-3 py-3 font-bold numbers">{formatNumber(row.rental_due)} تومان</td></tr>)}</tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section className="card mt-5 overflow-hidden p-5">
+            <div className="flex items-start justify-between gap-3"><div><h2 className="text-lg font-bold">ریز موارد دستگاه برای تسویه</h2><p className="helper mt-2">هر ردیف یک خدمت دستگاه برای یک مراجع است تا تسویه درصدی قابل پیگیری باشد.</p></div><span className="pill-soft">{formatNumber(report?.device_cases_detail.length ?? 0)} مورد</span></div>
+            {!report?.device_cases_detail.length ? <EmptyState icon={Activity} title="موردی برای تسویه وجود ندارد" text="پس از ثبت خدمت دستگاه، نام مراجع، تاریخ و سهم همان مورد اینجا دیده می‌شود." /> : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[980px] text-right text-sm">
+                  <thead className="border-b border-warm-100 text-xs text-warm-500"><tr><th className="px-3 py-3">تاریخ</th><th className="px-3 py-3">مراجع</th><th className="px-3 py-3">دستگاه</th><th className="px-3 py-3">خدمت</th><th className="px-3 py-3">ناحیه</th><th className="px-3 py-3">تعداد</th><th className="px-3 py-3">مبلغ</th><th className="px-3 py-3">درصد</th><th className="px-3 py-3">سهم اجاره</th></tr></thead>
+                  <tbody>{report.device_cases_detail.map((row, index) => <tr key={`${row.visit_id}-${row.device_name}-${index}`} className="border-b border-warm-50"><td className="px-3 py-3 numbers">{formatPersianDate(row.visit_date)}</td><td className="px-3 py-3 font-semibold">{row.client_name}</td><td className="px-3 py-3">{row.device_name}</td><td className="px-3 py-3">{row.service_name}</td><td className="px-3 py-3">{row.body_area}</td><td className="px-3 py-3 numbers">{formatNumber(row.quantity)}</td><td className="px-3 py-3 numbers">{formatNumber(row.revenue)} تومان</td><td className="px-3 py-3 numbers">{formatNumber(row.rental_percent)}٪</td><td className="px-3 py-3 font-bold numbers">{formatNumber(row.rental_due)} تومان</td></tr>)}</tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="card mt-5 p-5">
+            <h2 className="text-lg font-bold">وضعیت جلسات ماه</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-3"><div className="rounded-control bg-warm-50 p-4"><span className="text-xs text-warm-500">انجام‌شده</span><strong className="mt-2 block text-2xl numbers">{formatNumber(summary?.completed_visits ?? 0)}</strong></div><div className="rounded-control bg-warm-50 p-4"><span className="text-xs text-warm-500">برنامه‌ریزی/در انتظار</span><strong className="mt-2 block text-2xl numbers">{formatNumber(summary?.scheduled_visits ?? 0)}</strong></div><div className="rounded-control bg-warm-50 p-4"><span className="text-xs text-warm-500">لغوشده</span><strong className="mt-2 block text-2xl numbers">{formatNumber(summary?.canceled_visits ?? 0)}</strong></div></div>
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
 function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; setSettings: (settings: Settings) => void; toast: ToastFn }) {
   const [form, setForm] = useState(settings);
   const [mode, setMode] = useState<"simple" | "advanced">("simple");
   const [credentials, setCredentials] = useState({ current_password: "", username: settings.username || "admin", password: "", repeat: "" });
   const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [serviceEditor, setServiceEditor] = useState<ServiceCatalogItem>({ ...emptyServiceEditor });
+  const [deviceCatalog, setDeviceCatalog] = useState<DeviceCatalogItem[]>([]);
+  const [deviceEditor, setDeviceEditor] = useState<DeviceCatalogItem>({ ...emptyDeviceEditor });
   const [visitModes, setVisitModes] = useState<VisitModeOption[]>([]);
   const [visitModeEditor, setVisitModeEditor] = useState<VisitModeOption>({ ...emptyVisitModeEditor });
   const [loading, setLoading] = useState(false);
@@ -2198,9 +2462,10 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
     setLoading(true);
     Promise.all([
       invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false }),
+      invoke<DeviceCatalogItem[]>("list_device_catalog", { activeOnly: false }),
       invoke<VisitModeOption[]>("list_visit_modes", { activeOnly: false }),
-    ]).then(([services, modes]) => { setServiceCatalog(services); setVisitModes(modes); })
-      .catch((error) => toast(getErrorMessage(error, "تنظیمات خدمات خوانده نشد."), "error"))
+    ]).then(([services, devices, modes]) => { setServiceCatalog(services); setDeviceCatalog(devices); setVisitModes(modes); })
+      .catch((error) => toast(getErrorMessage(error, "تنظیمات خدمات و دستگاه‌ها خوانده نشد."), "error"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -2225,7 +2490,7 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
   };
   const setCalcSetting = (key: CalcSettingKey, value: number) => setForm((current) => ({ ...current, [key]: Number.isFinite(value) ? value : defaultCalculationSettings[key] }));
   const changeCredentials = async () => {
-    if (!credentials.username.trim() || credentials.password.length < 4 || credentials.password !== credentials.repeat) { toast("نام کاربری و رمز جدید را درست وارد کنید.", "error"); return; }
+    if (!credentials.username.trim() || credentials.password.length < 8 || credentials.password !== credentials.repeat) { toast("نام کاربری و رمز حداقل ۸ کاراکتری را درست وارد کنید.", "error"); return; }
     try {
       if (isDesktopRuntime()) await invoke("change_credentials", { input: { current_password: credentials.current_password, username: credentials.username, password: credentials.password } });
       setSettings({ ...settings, username: credentials.username });
@@ -2276,6 +2541,25 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
   };
   const toggleServiceDefinition = async (item: ServiceCatalogItem) => { try { const saved = await invoke<ServiceCatalogItem>("save_service_catalog_item", { item: { ...item, active: item.active === false } }); setServiceCatalog((items) => items.map((entry) => entry.id === saved.id ? saved : entry)); toast(saved.active ? "خدمت فعال شد." : "خدمت غیرفعال شد."); } catch (error) { toast(getErrorMessage(error, "تغییر وضعیت خدمت انجام نشد."), "error"); } };
 
+  const resetDeviceEditor = () => setDeviceEditor({ ...emptyDeviceEditor });
+  const saveDeviceDefinition = async () => {
+    if (!deviceEditor.name.trim()) { toast("نام دستگاه را وارد کنید.", "error"); return; }
+    const rentalPercent = Math.min(100, Math.max(0, Number(deviceEditor.rental_percent) || 0));
+    try {
+      const saved = await invoke<DeviceCatalogItem>("save_device_catalog_item", { item: { ...deviceEditor, name: deviceEditor.name.trim(), rental_percent: rentalPercent, active: deviceEditor.active !== false, description: deviceEditor.description?.trim() ?? "" } });
+      setDeviceCatalog((items) => { const index = items.findIndex((item) => item.id === saved.id); if (index < 0) return [...items, saved]; const next = [...items]; next[index] = saved; return next; });
+      resetDeviceEditor();
+      toast(deviceEditor.id ? "دستگاه و سهم اجاره ویرایش شد." : "دستگاه جدید اضافه شد.");
+    } catch (error) { toast(getErrorMessage(error, "ذخیره دستگاه انجام نشد."), "error"); }
+  };
+  const toggleDeviceDefinition = async (item: DeviceCatalogItem) => {
+    try {
+      const saved = await invoke<DeviceCatalogItem>("save_device_catalog_item", { item: { ...item, active: !item.active } });
+      setDeviceCatalog((items) => items.map((entry) => entry.id === saved.id ? saved : entry));
+      toast(saved.active ? "دستگاه فعال شد." : "دستگاه غیرفعال شد.");
+    } catch (error) { toast(getErrorMessage(error, "تغییر وضعیت دستگاه انجام نشد."), "error"); }
+  };
+
   const saveVisitModeDefinition = async () => {
     if (!visitModeEditor.name.trim()) { toast("نام شیوه ویزیت را وارد کنید.", "error"); return; }
     try {
@@ -2301,6 +2585,42 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
         <section className="card p-6 motion-enter motion-delay-1"><div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><ClipboardList className="text-sage" /><h2 className="text-xl font-bold">خدمات کلینیک</h2></div><p className="helper mt-2">هر تعداد خدمت تعریف کنید؛ در هر ویزیت هم می‌توان چند خدمت را با هم انتخاب کرد.</p></div><span className="pill-soft">{formatNumber(serviceCatalog.filter((x) => x.active).length)} فعال</span></div>
           <div className="settings-service-grid mt-6"><div className="service-editor-card"><h3 className="font-bold">{serviceEditor.id ? "ویرایش خدمت" : "خدمت جدید"}</h3><div className="mt-4 grid gap-3 sm:grid-cols-2"><SelectField label="گروه" value={(serviceEditor.group_key ?? "other") as string} onChange={(value) => setServiceEditor({ ...serviceEditor, group_key: value as ServiceGroup })} options={serviceGroupLabels} /><TextField label="نام خدمت" value={serviceEditor.name} onChange={(value) => setServiceEditor({ ...serviceEditor, name: value })} /><NumberField label="قیمت پیش‌فرض" value={serviceEditor.default_price} onChange={(value) => setServiceEditor({ ...serviceEditor, default_price: value })} suffix="تومان" /><OptionalNumberField label="مدت" value={serviceEditor.default_duration_minutes ? String(serviceEditor.default_duration_minutes) : ""} onChange={(value) => setServiceEditor({ ...serviceEditor, default_duration_minutes: value ? Number(value) : null })} suffix="دقیقه" /><div className="sm:col-span-2"><TextField label="توضیح" value={serviceEditor.description ?? ""} onChange={(value) => setServiceEditor({ ...serviceEditor, description: value })} /></div></div><div className="mt-4 flex gap-4"><label className="toggle-row"><input type="checkbox" checked={serviceEditor.body_area_required} onChange={(e) => setServiceEditor({ ...serviceEditor, body_area_required: e.target.checked })} /> ناحیه بدن لازم است</label><label className="toggle-row"><input type="checkbox" checked={serviceEditor.active !== false} onChange={(e) => setServiceEditor({ ...serviceEditor, active: e.target.checked })} /> فعال</label></div><div className="mt-4 flex gap-2"><PrimaryButton icon={Save} onClick={saveServiceDefinition}>{serviceEditor.id ? "ذخیره" : "افزودن"}</PrimaryButton>{serviceEditor.id && <SecondaryButton onClick={() => resetServiceEditor()}>انصراف</SecondaryButton>}</div></div>
             <div className="grid gap-3">{loading ? <SkeletonRows /> : serviceGroupKeys.map((group) => { const items = serviceCatalog.filter((x) => (x.group_key ?? "other") === group); if (!items.length) return null; return <div key={group} className="service-settings-group"><strong>{serviceGroupLabels[group]}</strong><div className="mt-3 grid gap-2">{items.map((item) => <div key={item.id ?? item.name} className={cn("service-settings-row", !item.active && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{formatNumber(item.default_price)} تومان</small></div><div className="flex gap-2"><button className="mini-action" onClick={() => setServiceEditor({ ...emptyServiceEditor, ...item })}><Pencil size={15} /> ویرایش</button><button className="mini-action" onClick={() => toggleServiceDefinition(item)}>{item.active ? "غیرفعال" : "فعال"}</button></div></div>)}</div></div>; })}</div></div>
+        </section>
+
+        <section className="card p-6 motion-enter">
+          <div className="flex items-start justify-between gap-3">
+            <div><div className="flex items-center gap-2"><Activity className="text-sage" /><h2 className="text-xl font-bold">دستگاه‌ها و سهم اجاره</h2></div><p className="helper mt-2">دستگاه‌ها را یک‌بار تعریف کنید تا ثبت خدمت و گزارش سهم اجاره یکدست و قابل اتکا باشد.</p></div>
+            <span className="pill-soft">{formatNumber(deviceCatalog.filter((item) => item.active).length)} فعال</span>
+          </div>
+          <div className="settings-service-grid mt-6">
+            <div className="service-editor-card">
+              <h3 className="font-bold">{deviceEditor.id ? "ویرایش دستگاه" : "دستگاه جدید"}</h3>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <TextField label="نام دستگاه" value={deviceEditor.name} onChange={(value) => setDeviceEditor({ ...deviceEditor, name: value })} placeholder="مثلاً LPG یا کویتیشن" />
+                <NumberField label="سهم اجاره" value={deviceEditor.rental_percent} onChange={(value) => setDeviceEditor({ ...deviceEditor, rental_percent: Math.min(100, Math.max(0, value)) })} suffix="درصد" />
+                <div className="sm:col-span-2"><TextField label="توضیح" value={deviceEditor.description ?? ""} onChange={(value) => setDeviceEditor({ ...deviceEditor, description: value })} placeholder="اختیاری؛ مثلاً مالک دستگاه یا شیوه تسویه" /></div>
+              </div>
+              <div className="mt-4"><label className="toggle-row"><input type="checkbox" checked={deviceEditor.active !== false} onChange={(event) => setDeviceEditor({ ...deviceEditor, active: event.target.checked })} /> فعال و قابل انتخاب هنگام ثبت خدمت</label></div>
+              <div className="mt-4 flex flex-wrap gap-2"><PrimaryButton icon={Save} onClick={saveDeviceDefinition}>{deviceEditor.id ? "ذخیره" : "افزودن"}</PrimaryButton>{deviceEditor.id && <SecondaryButton onClick={resetDeviceEditor}>انصراف</SecondaryButton>}</div>
+            </div>
+            <div className="grid gap-2">
+              {deviceCatalog.length === 0 ? <EmptyState icon={Activity} title="دستگاهی تعریف نشده" text="برای گزارش دقیق استفاده و اجاره، اولین دستگاه را اضافه کنید." /> : deviceCatalog.map((item) => (
+                <div key={item.id ?? item.name} className={cn("service-settings-row", !item.active && "service-settings-row-inactive")}>
+                  <div><strong>{item.name}</strong><small>سهم اجاره {formatNumber(item.rental_percent)}٪{item.description ? ` · ${item.description}` : ""}</small></div>
+                  <div className="flex gap-2"><button className="mini-action" onClick={() => setDeviceEditor({ ...emptyDeviceEditor, ...item })}><Pencil size={15} /> ویرایش</button><button className="mini-action" onClick={() => toggleDeviceDefinition(item)}>{item.active ? "غیرفعال" : "فعال"}</button></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="card p-6">
+          <div className="flex items-center gap-2"><BarChart3 className="text-sage" /><h2 className="text-xl font-bold">منطق آمار داشبورد و گزارش‌ها</h2></div>
+          <p className="helper mt-2">این گزینه‌ها فقط آمار مدیریتی داشبورد و گزارش‌ها را تغییر می‌دهند و هیچ اثری بر فرمول‌های محاسبات تغذیه ندارند.</p>
+          <div className="mt-5 grid gap-3">
+            <label className="toggle-row rounded-control border border-warm-100 bg-warm-50 px-4 py-3"><input type="checkbox" checked={form.reports_completed_only !== false} onChange={(event) => setForm({ ...form, reports_completed_only: event.target.checked })} /><span><strong className="block">فقط ویزیت‌های انجام‌شده در عملکرد واقعی</strong><small className="mt-1 block text-warm-500">در صورت خاموش‌کردن، ویزیت‌های غیرلغوشده نیز در آمار استفاده لحاظ می‌شوند.</small></span></label>
+            <label className="toggle-row rounded-control border border-warm-100 bg-warm-50 px-4 py-3"><input type="checkbox" checked={form.reports_use_service_revenue !== false} onChange={(event) => setForm({ ...form, reports_use_service_revenue: event.target.checked })} /><span><strong className="block">محاسبه درآمد از خدمات ثبت‌شده</strong><small className="mt-1 block text-warm-500">در صورت خاموش‌کردن، مبلغ کل ثبت‌شده در خود ویزیت مبنای درآمد قرار می‌گیرد.</small></span></label>
+          </div>
         </section>
 
         <section className="card p-6"><div className="flex items-center gap-2"><Video className="text-sage" /><h2 className="text-xl font-bold">شیوه‌های ویزیت</h2></div><p className="helper mt-2">حضوری و آنلاین پیش‌فرض هستند؛ عنوان‌های دیگر مثل تلفنی یا منزل را هم اضافه کنید.</p><div className="settings-service-grid mt-5"><div className="service-editor-card"><div className="grid gap-3"><TextField label="نام شیوه" value={visitModeEditor.name} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, name: value })} placeholder="مثلاً تلفنی" /><TextField label="توضیح" value={visitModeEditor.description ?? ""} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, description: value })} /></div><div className="mt-4 flex gap-2"><PrimaryButton icon={Plus} onClick={saveVisitModeDefinition}>{visitModeEditor.id ? "ذخیره" : "افزودن"}</PrimaryButton>{visitModeEditor.id && <SecondaryButton onClick={() => setVisitModeEditor({ ...emptyVisitModeEditor })}>انصراف</SecondaryButton>}</div></div><div className="grid gap-2">{visitModes.map((item) => <div key={item.id ?? item.key} className={cn("service-settings-row", !item.active && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{item.description || visitModeDefaultLabels[item.key] || "شیوه مراجعه"}</small></div><div className="flex gap-2"><button className="mini-action" onClick={() => setVisitModeEditor(item)}><Pencil size={15} /> ویرایش</button><button className="mini-action" onClick={() => toggleVisitMode(item)}>{item.active ? "غیرفعال" : "فعال"}</button></div></div>)}</div></div></section>
@@ -2389,10 +2709,10 @@ function SecondaryButton({ children, onClick, icon: Icon, disabled = false }: { 
   return <button type="button" onClick={onClick} disabled={disabled} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control border border-warm-100 bg-paper px-5 text-sm font-semibold text-charcoal hover:bg-warm-50 disabled:cursor-not-allowed disabled:opacity-60">{Icon && <Icon size={19} />}{children}</button>;
 }
 
-function Stat({ label, value, icon: Icon, hint }: { label: string; value?: number; icon: typeof Users; hint?: string }) {
+function Stat({ label, value, icon: Icon, hint, onClick }: { label: string; value?: number; icon: typeof Users; hint?: string; onClick?: () => void }) {
   const display = metricDisplay(value);
-  return (
-    <div className={cn("metric-card card p-5", display.isZero && "metric-card-empty")}>
+  const content = (
+    <>
       <div className="mb-5 flex items-center justify-between gap-3 text-warm-500">
         <span className="text-sm font-semibold">{label}</span>
         <span className="grid h-9 w-9 place-items-center rounded-control bg-warm-50 text-olive"><Icon size={20} /></span>
@@ -2403,8 +2723,10 @@ function Stat({ label, value, icon: Icon, hint }: { label: string; value?: numbe
         <p className={cn("metric-value text-charcoal", display.isZero && "metric-value-empty")}>{display.text}</p>
       )}
       <p className="mt-3 text-xs leading-6 text-warm-500">{display.isZero ? "هنوز موردی ثبت نشده" : hint}</p>
-    </div>
+    </>
   );
+  if (onClick) return <button type="button" onClick={onClick} className={cn("metric-card card w-full p-5 text-right soft-transition hover:-translate-y-0.5 hover:shadow-lift", display.isZero && "metric-card-empty")}>{content}</button>;
+  return <div className={cn("metric-card card p-5", display.isZero && "metric-card-empty")}>{content}</div>;
 }
 
 function ProfileAvatar({ client, size = "md" }: { client: Client; size?: "md" | "lg" }) {

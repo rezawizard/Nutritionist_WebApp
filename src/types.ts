@@ -129,10 +129,12 @@ export interface VisitService {
   id?: number;
   visit_id: number;
   service_id?: number | null;
+  device_id?: number | null;
   service_name_snapshot: string;
   service_group_snapshot?: ServiceGroup | string;
   body_area: string;
   device_name: string;
+  device_rental_percent_snapshot?: number;
   duration_minutes?: number | null;
   price: number;
   quantity: number;
@@ -247,6 +249,14 @@ export interface ServiceCatalogItem {
   description?: string;
 }
 
+export interface DeviceCatalogItem {
+  id?: number;
+  name: string;
+  rental_percent: number;
+  active: boolean;
+  description?: string;
+}
+
 export interface MeasurementValue {
   id?: number;
   visit_id: number;
@@ -313,6 +323,13 @@ export interface Settings {
   diet_plan_show_macros?: boolean;
   diet_plan_show_calories?: boolean;
   report_show_contact?: boolean;
+  reports_completed_only?: boolean;
+  reports_use_service_revenue?: boolean;
+}
+
+export interface SecurityStatus {
+  username: string;
+  must_change_credentials: boolean;
 }
 
 export interface DashboardVisitSummary {
@@ -341,4 +358,64 @@ export interface DashboardStats {
   recent_visits: DashboardVisitSummary[];
 }
 
-export type Screen = "dashboard" | "clients" | "client-form" | "calculator" | "settings";
+export interface MonthlyReportSummary {
+  unique_clients: number;
+  completed_visits: number;
+  scheduled_visits: number;
+  canceled_visits: number;
+  diet_plans: number;
+  body_analysis_cases: number;
+  device_cases: number;
+  device_units: number;
+  consultations: number;
+  services_count: number;
+  total_revenue: number;
+  device_rental_due: number;
+}
+
+export interface MonthlyServiceGroupRow {
+  group_key: ServiceGroup | string;
+  cases: number;
+  quantity: number;
+  revenue: number;
+}
+
+export interface MonthlyDeviceUsageRow {
+  device_id?: number | null;
+  device_name: string;
+  service_name: string;
+  body_area: string;
+  cases: number;
+  quantity: number;
+  total_minutes: number;
+  revenue: number;
+  rental_percent: number;
+  rental_due: number;
+}
+
+export interface MonthlyDeviceCaseRow {
+  visit_id: number;
+  visit_date: string;
+  client_id: number;
+  client_name: string;
+  device_name: string;
+  service_name: string;
+  body_area: string;
+  quantity: number;
+  revenue: number;
+  rental_percent: number;
+  rental_due: number;
+}
+
+export interface MonthlyReport {
+  start_date: string;
+  end_date: string;
+  completed_only: boolean;
+  revenue_from_services: boolean;
+  summary: MonthlyReportSummary;
+  service_groups: MonthlyServiceGroupRow[];
+  devices: MonthlyDeviceUsageRow[];
+  device_cases_detail: MonthlyDeviceCaseRow[];
+}
+
+export type Screen = "dashboard" | "clients" | "client-form" | "calculator" | "reports" | "settings";

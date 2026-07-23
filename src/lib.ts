@@ -403,6 +403,16 @@ export function daysInJalaliMonth(year: number, month: number) {
   return jalaliCalendar(year).leap === 0 ? 30 : 29;
 }
 
+export function jalaliMonthRangeToIso(year: number, month: number) {
+  const start = jalaliInputToIso(`${year}/${month}/1`);
+  const end = jalaliInputToIso(`${year}/${month}/${daysInJalaliMonth(year, month)}`);
+  if (!start || !end) {
+    const today = todayIsoDate();
+    return { start: startOfMonthIso(today), end: endOfMonthIso(today) };
+  }
+  return { start, end };
+}
+
 export function addDaysToIso(iso: string, days: number) {
   const base = isValidIsoDate(iso) ? new Date(`${iso}T00:00:00`) : new Date();
   base.setDate(base.getDate() + days);
