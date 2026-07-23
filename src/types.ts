@@ -325,6 +325,24 @@ export interface Settings {
   report_show_contact?: boolean;
   reports_completed_only?: boolean;
   reports_use_service_revenue?: boolean;
+  backup_directory?: string;
+}
+
+export interface BackupStatus {
+  path: string;
+  exists: boolean;
+  created_at: string;
+  clients: number;
+  visits: number;
+  attachments: number;
+}
+
+export interface RestoreCompleteResult {
+  safety_backup_path: string;
+  clients: number;
+  visits: number;
+  attachments: number;
+  remapped_paths: number;
 }
 
 export interface SecurityStatus {

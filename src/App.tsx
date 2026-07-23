@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Archive,
@@ -84,7 +85,7 @@ import {
   visitModeDefaultLabels,
   jalaliMonthRangeToIso,
 } from "./lib";
-import type { ActivityLevel, Attachment, AttachmentCategory, CareTrack, CareTrackType, Client, ClientProfileBundle, DashboardStats, DeviceCatalogItem, DietMeal, DietPlan, ExtendedMeasurements, Gender, Goal, MonthlyReport, NutritionCalculation, Screen, SecurityStatus, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitModeOption, VisitService, VisitType } from "./types";
+import type { ActivityLevel, Attachment, AttachmentCategory, CareTrack, CareTrackType, Client, ClientProfileBundle, BackupStatus, DashboardStats, DeviceCatalogItem, DietMeal, DietPlan, ExtendedMeasurements, Gender, Goal, MonthlyReport, NutritionCalculation, RestoreCompleteResult, Screen, SecurityStatus, ServiceCatalogItem, ServiceGroup, Settings, VisitDetail, VisitMeasurements, VisitModeOption, VisitService, VisitType } from "./types";
 import type { ClientRecord } from "./types";
 import BodyAnalysisViewer from "./components/BodyAnalysisViewer";
 import ClientTrendChart from "./components/ClientTrendChart";
@@ -107,6 +108,7 @@ const defaultSettings: Settings = {
   report_show_contact: true,
   reports_completed_only: true,
   reports_use_service_revenue: true,
+  backup_directory: "",
   ...defaultCalculationSettings,
 };
 
@@ -431,7 +433,33 @@ export default function App() {
   const [version, setVersion] = useState(0);
   const [focusClientSearchVersion, setFocusClientSearchVersion] = useState(0);
   const [clientListPreset, setClientListPreset] = useState<"active" | "all" | null>(null);
+  const [isClosing, setIsClosing] = useState(false);
+  const closingRef = useRef(false);
   const { toasts, push } = useToasts();
+
+  useEffect(() => {
+    if (!isDesktopRuntime()) return;
+    const appWindow = getCurrentWindow();
+    const unlistenPromise = appWindow.onCloseRequested(async (event) => {
+      event.preventDefault();
+      if (closingRef.current) return;
+      closingRef.current = true;
+      setIsClosing(true);
+      try {
+        await invoke<string>("create_auto_backup");
+        await appWindow.destroy();
+      } catch (error) {
+        setIsClosing(false);
+        closingRef.current = false;
+        const exitAnyway = window.confirm(`${getErrorMessage(error, "پشتیبان خودکار هنگام خروج ساخته نشد.")}\n\nبدون پشتیبان از برنامه خارج می‌شوید؟`);
+        if (exitAnyway) {
+          closingRef.current = true;
+          await appWindow.destroy();
+        }
+      }
+    });
+    return () => { void unlistenPromise.then((unlisten) => unlisten()); };
+  }, []);
 
   useEffect(() => {
     if (!isDesktopRuntime()) return;
@@ -460,15 +488,25 @@ export default function App() {
     if (focusSearch) setFocusClientSearchVersion((value) => value + 1);
   };
 
+  const closingOverlay = isClosing ? (
+    <div className="fixed inset-0 z-[100] grid place-items-center bg-charcoal/70 p-6" dir="rtl">
+      <div className="w-full max-w-md rounded-card bg-paper p-7 text-center shadow-lift">
+        <Database className="mx-auto text-sage" size={38} />
+        <h2 className="mt-4 text-xl font-bold text-charcoal">در حال پشتیبان‌گیری و خروج</h2>
+        <p className="mt-3 text-sm leading-7 text-warm-500">آخرین پشتیبان کامل در پوشه اصلی جایگزین می‌شود. تا بسته‌شدن برنامه صبر کنید.</p>
+      </div>
+    </div>
+  ) : null;
+
   if (!unlocked) {
-    return <LoginScreen settings={settings} onLogin={(status) => { setUnlocked(true); setMustChangeCredentials(status.must_change_credentials); }} toast={push} toasts={toasts} />;
+    return <><LoginScreen settings={settings} onLogin={(status) => { setUnlocked(true); setMustChangeCredentials(status.must_change_credentials); }} toast={push} toasts={toasts} />{closingOverlay}</>;
   }
 
   if (mustChangeCredentials) {
-    return <ForcedCredentialChange settings={settings} toast={push} toasts={toasts} onCompleted={(username) => {
+    return <><ForcedCredentialChange settings={settings} toast={push} toasts={toasts} onCompleted={(username) => {
       setSettings((current) => ({ ...current, username }));
       setMustChangeCredentials(false);
-    }} />;
+    }} />{closingOverlay}</>;
   }
 
   return (
@@ -547,6 +585,7 @@ export default function App() {
         </main>
       </div>
       <ToastStack toasts={toasts} />
+      {closingOverlay}
     </div>
   );
 }
@@ -2455,10 +2494,16 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
   const [deviceEditor, setDeviceEditor] = useState<DeviceCatalogItem>({ ...emptyDeviceEditor });
   const [visitModes, setVisitModes] = useState<VisitModeOption[]>([]);
   const [visitModeEditor, setVisitModeEditor] = useState<VisitModeOption>({ ...emptyVisitModeEditor });
+  const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
   const [loading, setLoading] = useState(false);
   useEffect(() => setForm(settings), [settings]);
+  const refreshBackupStatus = () => {
+    if (!isDesktopRuntime()) return;
+    invoke<BackupStatus>("get_auto_backup_status").then(setBackupStatus).catch(() => setBackupStatus(null));
+  };
   useEffect(() => {
     if (!isDesktopRuntime()) return;
+    refreshBackupStatus();
     setLoading(true);
     Promise.all([
       invoke<ServiceCatalogItem[]>("list_service_catalog", { activeOnly: false }),
@@ -2472,7 +2517,7 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
   const save = async () => {
     try {
       const saved = isDesktopRuntime() ? await invoke<Settings>("save_settings", { settings: form }) : form;
-      setSettings(saved); toast("تنظیمات ذخیره شد.");
+      setSettings(saved); refreshBackupStatus(); toast("تنظیمات ذخیره شد.");
     } catch (error) { toast(getErrorMessage(error, "ذخیره تنظیمات انجام نشد."), "error"); }
   };
   const chooseBrandImage = async (kind: "logo" | "background") => {
@@ -2498,6 +2543,24 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
       toast("اطلاعات ورود تغییر کرد.");
     } catch (error) { toast(getErrorMessage(error, "رمز فعلی درست نیست یا تغییر انجام نشد."), "error"); }
   };
+  const chooseBackupDirectory = async () => {
+    try {
+      const selected = await open({ directory: true, multiple: false, title: "پوشه اصلی پشتیبان Dietory را انتخاب کنید" });
+      if (!selected || Array.isArray(selected)) return;
+      setForm((current) => ({ ...current, backup_directory: selected }));
+      toast("پوشه انتخاب شد؛ برای فعال‌شدن، تنظیمات را ذخیره کنید.");
+    } catch (error) { toast(getErrorMessage(error, "انتخاب پوشه پشتیبان انجام نشد."), "error"); }
+  };
+  const createAutoBackupNow = async () => {
+    try {
+      const path = await invoke<string>("create_auto_backup");
+      refreshBackupStatus();
+      toast(`پشتیبان اصلی به‌روزرسانی شد: ${path}`);
+    } catch (error) { toast(getErrorMessage(error, "به‌روزرسانی پشتیبان اصلی انجام نشد."), "error"); }
+  };
+  const openBackupFolder = async () => {
+    try { await invoke("open_backup_folder"); } catch (error) { toast(getErrorMessage(error, "بازکردن پوشه پشتیبان انجام نشد."), "error"); }
+  };
   const exportCompleteBackup = async () => {
     try {
       const path = await invoke<string>("export_complete_backup");
@@ -2510,11 +2573,12 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
     try {
       const selected = await open({ directory: true, multiple: false, title: "پوشه پشتیبان کامل Dietory را انتخاب کنید" });
       if (!selected || Array.isArray(selected)) return;
-      const safetyPath = await invoke<string>("restore_complete_backup", { path: selected });
+      const result = await invoke<RestoreCompleteResult>("restore_complete_backup", { path: selected });
       const restored = await invoke<Settings>("get_settings");
       setSettings(restored);
       setForm(restored);
-      toast(`بازیابی کامل شد. یک پشتیبان ایمنی هم ساخته شد: ${safetyPath}`);
+      refreshBackupStatus();
+      toast(`بازیابی کامل شد: ${formatNumber(result.clients)} مراجع، ${formatNumber(result.visits)} ویزیت و ${formatNumber(result.attachments)} فایل. پشتیبان ایمنی: ${result.safety_backup_path}`);
     } catch (error) {
       toast(getErrorMessage(error, "بازیابی کامل انجام نشد."), "error");
     }
@@ -2626,8 +2690,15 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
         <section className="card p-6"><div className="flex items-center gap-2"><Video className="text-sage" /><h2 className="text-xl font-bold">شیوه‌های ویزیت</h2></div><p className="helper mt-2">حضوری و آنلاین پیش‌فرض هستند؛ عنوان‌های دیگر مثل تلفنی یا منزل را هم اضافه کنید.</p><div className="settings-service-grid mt-5"><div className="service-editor-card"><div className="grid gap-3"><TextField label="نام شیوه" value={visitModeEditor.name} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, name: value })} placeholder="مثلاً تلفنی" /><TextField label="توضیح" value={visitModeEditor.description ?? ""} onChange={(value) => setVisitModeEditor({ ...visitModeEditor, description: value })} /></div><div className="mt-4 flex gap-2"><PrimaryButton icon={Plus} onClick={saveVisitModeDefinition}>{visitModeEditor.id ? "ذخیره" : "افزودن"}</PrimaryButton>{visitModeEditor.id && <SecondaryButton onClick={() => setVisitModeEditor({ ...emptyVisitModeEditor })}>انصراف</SecondaryButton>}</div></div><div className="grid gap-2">{visitModes.map((item) => <div key={item.id ?? item.key} className={cn("service-settings-row", !item.active && "service-settings-row-inactive")}><div><strong>{item.name}</strong><small>{item.description || visitModeDefaultLabels[item.key] || "شیوه مراجعه"}</small></div><div className="flex gap-2"><button className="mini-action" onClick={() => setVisitModeEditor(item)}><Pencil size={15} /> ویرایش</button><button className="mini-action" onClick={() => toggleVisitMode(item)}>{item.active ? "غیرفعال" : "فعال"}</button></div></div>)}</div></div></section>
 
         <section className="card p-6 motion-enter">
-          <div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Database className="text-sage" /><h2 className="text-xl font-bold">پشتیبان‌گیری امن</h2></div><p className="helper mt-2">پشتیبان کامل، دیتابیس و تمام فایل‌های مراجعین را باهم نگه می‌دارد و گزینه پیشنهادی قبل از هر آپدیت است.</p></div><span className="pill-soft">پیشنهادی</span></div>
-          <div className="mt-5 grid gap-3 md:grid-cols-2"><button type="button" className="backup-action backup-action-primary" onClick={exportCompleteBackup}><Download size={22} /><span><strong>ساخت پشتیبان کامل</strong><small>دیتابیس، پرونده‌ها، تصاویر، PDFها و دارایی‌های برند</small></span></button><button type="button" className="backup-action" onClick={restoreCompleteBackup}><FileUp size={22} /><span><strong>بازیابی پشتیبان کامل</strong><small>انتخاب پوشه‌ای که فایل manifest.json دارد</small></span></button></div>
+          <div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Database className="text-sage" /><h2 className="text-xl font-bold">پشتیبان‌گیری امن و بازیابی کامل</h2></div><p className="helper mt-2">هنگام هر بار بستن عادی Dietory، پشتیبان اصلی پیش از خروج به‌صورت خودکار و اتمی جایگزین می‌شود. دیتابیس، پرونده‌ها، تصاویر، PDFها، رژیم‌ها و تنظیمات همگی داخل پشتیبان هستند.</p></div><span className="pill-soft">خودکار هنگام خروج</span></div>
+          <div className="mt-5 rounded-card border border-warm-100 bg-warm-50 p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div><strong className="block">پوشه اصلی پشتیبان</strong><small className="numbers mt-1 block break-all text-warm-500" dir="ltr">{form.backup_directory?.trim() || "Documents\\Dietory Backups (پیش‌فرض)"}</small></div><div className="flex flex-wrap gap-2"><SecondaryButton icon={FolderOpen} onClick={chooseBackupDirectory}>انتخاب پوشه</SecondaryButton><SecondaryButton icon={FolderOpen} onClick={openBackupFolder}>بازکردن پوشه</SecondaryButton></div></div>
+            <p className="mt-3 text-xs leading-6 text-warm-500">برای نگهداری خارج از سیستم، می‌توانید پوشه یک فلش، هارد اکسترنال، OneDrive یا پوشه همگام‌شونده Google Drive Desktop را انتخاب کنید. پس از تغییر مسیر، «ذخیره تنظیمات» را بزنید.</p>
+          </div>
+          <div className="mt-4 rounded-card border border-warm-100 bg-white p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div><strong>{backupStatus?.exists ? "آخرین پشتیبان اصلی موجود است" : "هنوز پشتیبان اصلی ساخته نشده"}</strong><small className="mt-1 block text-warm-500">{backupStatus?.exists ? `${backupStatus.created_at || "زمان نامشخص"} · ${formatNumber(backupStatus.clients)} مراجع · ${formatNumber(backupStatus.visits)} ویزیت · ${formatNumber(backupStatus.attachments)} فایل` : "با خروج از برنامه یا دکمه زیر، اولین نسخه ساخته می‌شود."}</small></div><SecondaryButton icon={Save} onClick={createAutoBackupNow}>به‌روزرسانی پشتیبان اصلی اکنون</SecondaryButton></div>
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-2"><button type="button" className="backup-action backup-action-primary" onClick={exportCompleteBackup}><Download size={22} /><span><strong>ساخت نسخه دستی تاریخ‌دار</strong><small>یک نسخه جدا برای انتقال، آرشیو یا نگهداری در فضای ابری</small></span></button><button type="button" className="backup-action" onClick={restoreCompleteBackup}><FileUp size={22} /><span><strong>بازیابی پشتیبان کامل</strong><small>سلامت فایل‌ها بررسی و مسیرها برای سیستم جدید خودکار اصلاح می‌شوند</small></span></button></div>
           <details className="advanced-backup mt-4"><summary>گزینه‌های فنی، سبک و پاک‌سازی</summary><div className="mt-4 flex flex-wrap gap-3"><SecondaryButton icon={Download} onClick={exportData}>خروجی JSON سبک</SecondaryButton><SecondaryButton icon={Database} onClick={exportSqlite}>فقط SQLite</SecondaryButton><SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی JSON قدیمی</SecondaryButton><SecondaryButton icon={Trash2} onClick={cleanupAutoVisits}>پاک‌سازی ویزیت‌های ثبت اولیه مصنوعی</SecondaryButton></div></details>
         </section>
       </div>}
