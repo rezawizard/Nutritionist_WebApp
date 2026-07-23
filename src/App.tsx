@@ -417,6 +417,7 @@ export default function App() {
   const [editing, setEditing] = useState<Client | null>(null);
   const [calculatorClient, setCalculatorClient] = useState<Client | null>(null);
   const [version, setVersion] = useState(0);
+  const [focusClientSearchVersion, setFocusClientSearchVersion] = useState(0);
   const { toasts, push } = useToasts();
 
   useEffect(() => {
@@ -467,6 +468,10 @@ export default function App() {
               version={version}
               settings={settings}
               onNew={() => openClientForm()}
+              onPrevious={() => {
+                setScreen("clients");
+                setFocusClientSearchVersion((value) => value + 1);
+              }}
               onCalculator={() => openCalculator()}
               onEdit={openClientForm}
             />
@@ -474,6 +479,7 @@ export default function App() {
           {screen === "clients" && (
             <Clients
               version={version}
+              focusSearchVersion={focusClientSearchVersion}
               onNew={() => openClientForm()}
               onEdit={openClientForm}
               onCalculate={openCalculator}
@@ -488,6 +494,11 @@ export default function App() {
               onSaved={(client) => {
                 setEditing(client);
                 setVersion((value) => value + 1);
+              }}
+              onDeleted={() => {
+                setEditing(null);
+                setVersion((value) => value + 1);
+                setScreen("clients");
               }}
               toast={push}
             />
@@ -618,13 +629,14 @@ function LoginScreen({ settings, onLogin, toast, toasts }: { settings: Settings;
   );
 }
 
-function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version: number; settings: Settings; onNew: () => void; onCalculator: () => void; onEdit: (client: Client) => void }) {
+function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit }: { version: number; settings: Settings; onNew: () => void; onPrevious: () => void; onCalculator: () => void; onEdit: (client: Client) => void }) {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [calendarMode, setCalendarMode] = useState<"today" | "week" | "month" | "exact" | "range" | "all">("today");
   const [exactDate, setExactDate] = useState(todayIsoDate());
   const [rangeStart, setRangeStart] = useState(todayIsoDate());
   const [rangeEnd, setRangeEnd] = useState(addDaysToIso(todayIsoDate(), 7));
   const [dashboardError, setDashboardError] = useState("");
+  const calendarSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -678,9 +690,9 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[420px]">
               <PrimaryButton icon={Plus} onClick={onNew}>ثبت مراجع جدید</PrimaryButton>
-              <SecondaryButton icon={Search} onClick={() => document.getElementById("client-search-shortcut")?.focus()}>مراجع قبلی / ویزیت</SecondaryButton>
+              <SecondaryButton icon={Search} onClick={onPrevious}>مراجع قبلی / ویزیت</SecondaryButton>
               <SecondaryButton icon={Calculator} onClick={onCalculator}>محاسبات</SecondaryButton>
-              <SecondaryButton icon={CalendarDays} onClick={() => setCalendarMode("today")}>تقویم امروز</SecondaryButton>
+              <SecondaryButton icon={CalendarDays} onClick={() => { setCalendarMode("today"); window.setTimeout(() => calendarSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0); }}>تقویم امروز</SecondaryButton>
             </div>
           </div>
           {dashboardIsEmpty && (
@@ -698,7 +710,7 @@ function Dashboard({ version, settings, onNew, onCalculator, onEdit }: { version
       </section>
 
       <section className="motion-enter motion-delay-1 mt-5 grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-        <div className="card p-6">
+        <div ref={calendarSectionRef} className="card p-6">
           <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-extrabold">تقویم مراجعین</h2>
@@ -761,12 +773,22 @@ function DashboardVisitRow({ visit }: { visit: DashboardStats["upcoming_visits"]
 }
 
 
-function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { version: number; onNew: () => void; onEdit: (client: Client) => void; onCalculate: (client: Client) => void; onChanged: () => void; toast: ToastFn }) {
+function Clients({ version, focusSearchVersion, onNew, onEdit, onCalculate, onChanged, toast }: { version: number; focusSearchVersion: number; onNew: () => void; onEdit: (client: Client) => void; onCalculate: (client: Client) => void; onChanged: () => void; toast: ToastFn }) {
   const [clients, setClients] = useState<Client[] | null>(null);
   const [query, setQuery] = useState("");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [goalFilter, setGoalFilter] = useState<ClientGoalFilter>("all");
   const [mode, setMode] = useState<"new" | "returning">("returning");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (focusSearchVersion <= 0) return;
+    setMode("returning");
+    window.requestAnimationFrame(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    });
+  }, [focusSearchVersion]);
 
   useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -826,7 +848,7 @@ function Clients({ version, onNew, onEdit, onCalculate, onChanged, toast }: { ve
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-warm-500" size={20} />
-            <input id="client-search-shortcut" className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی مراجع قبلی: نام، موبایل، ایمیل یا هدف" />
+            <input ref={searchInputRef} id="client-search-shortcut" className="control w-full pr-12" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جست‌وجوی مراجع قبلی: نام، موبایل، ایمیل یا هدف" />
           </div>
           <label className="flex h-12 items-center gap-2 rounded-control border border-warm-100 bg-warm-50 px-4 text-sm text-warm-500">
             <input type="checkbox" checked={includeArchived} onChange={(event) => setIncludeArchived(event.target.checked)} />
@@ -873,7 +895,11 @@ function makeDietItem() {
   return { id: `food-${Date.now()}-${Math.random().toString(16).slice(2)}`, title: "", amount: "", calories: 0, protein_g: 0, carb_g: 0, fat_g: 0, notes: "" };
 }
 
-function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client | null; onBack: () => void; onSaved: (client: Client) => void; toast: ToastFn }) {
+function makeVisitRequestId() {
+  return globalThis.crypto?.randomUUID?.() ?? `visit-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function ClientProfileForm({ client, onBack, onSaved, onDeleted, toast }: { client: Client | null; onBack: () => void; onSaved: (client: Client) => void; onDeleted: () => void; toast: ToastFn }) {
   const [form, setForm] = useState<Client>(client ?? { ...emptyClient });
   const [records, setRecords] = useState<ClientRecord[]>([]);
   const [visits, setVisits] = useState<VisitDetail[]>([]);
@@ -897,6 +923,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   const [measurementForm, setMeasurementForm] = useState<MeasurementForm>({ ...emptyMeasurementForm });
   const [errors, setErrors] = useState<FieldErrors>({});
   const [topError, setTopError] = useState("");
+  const [editingVisitId, setEditingVisitId] = useState<number | null>(null);
+  const [visitSaving, setVisitSaving] = useState(false);
+  const [visitRequestId, setVisitRequestId] = useState(makeVisitRequestId);
+  const visitFormRef = useRef<HTMLDivElement>(null);
   const [serviceForm, setServiceForm] = useState({ groupKey: "diet" as ServiceGroup, visitId: "", catalogId: "", quantity: 1, price: 0, body_area: "", device_name: "", notes: "" });
   const [attachmentForm, setAttachmentForm] = useState({ category: "other" as AttachmentCategory, title: "", notes: "" });
   const [visitForm, setVisitForm] = useState({
@@ -918,6 +948,8 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   });
 
   const resetVisitForm = (source?: Client) => {
+    setEditingVisitId(null);
+    setVisitRequestId(makeVisitRequestId());
     setVisitForm({
       visit_date: todayIsoDate(),
       visit_time: "",
@@ -945,7 +977,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     setErrors({});
     setTopError("");
     resetVisitForm(client ?? undefined);
-  }, [client]);
+  }, [client?.id]);
 
   useEffect(() => {
     if (!client?.id || !isDesktopRuntime()) {
@@ -976,6 +1008,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         ]);
         if (cancelled) return;
 
+        setForm(bundle.client);
         const visitDetails: VisitDetail[] = bundle.visits.map((item) => ({ visit: item.visit, measurements: item.measurements }));
         setVisits(visitDetails);
         setAttachments(bundle.attachments);
@@ -1094,36 +1127,9 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     }
     try {
       const saved = isDesktopRuntime() ? await invoke<Client>("save_client", { client: form }) : form;
-      if (!client && saved.id && isDesktopRuntime()) {
-        await invoke<VisitDetail>("save_visit_with_measurements", {
-          visit: {
-            client_id: saved.id,
-            track_id: visitForm.track_id,
-            visit_date: todayIsoDate(),
-            visit_time: "",
-            status: "completed",
-            visit_type: visitForm.visit_type,
-            visit_mode_key: visitForm.visit_mode_key,
-            visit_mode_name_snapshot: visitForm.visit_mode_name_snapshot,
-            reason: "ثبت اولیه مراجعه",
-            clinical_notes: "ثبت اولیه مراجعه",
-            private_notes: "",
-            next_visit_enabled: false,
-            next_visit_date: "",
-            next_visit_time: "",
-            next_visit_status: "",
-            total_fee: 0,
-          },
-          measurements: {
-            weight_kg: saved.weight_kg,
-            height_cm: saved.height_cm,
-            notes: "ثبت اولیه مراجعه",
-          },
-        });
-      }
       setTopError("");
       onSaved(saved);
-      toast(client ? "پرونده ذخیره شد." : "مراجعه‌کننده جدید ثبت شد.");
+      toast(client ? "پرونده ذخیره شد." : "مراجعه‌کننده جدید ثبت شد؛ برای او هنوز ویزیتی ایجاد نشده است.");
     } catch (error) {
       const message = getErrorMessage(error, "ذخیره انجام نشد؛ علت نامشخص است.");
       setTopError(message);
@@ -1132,6 +1138,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
   };
 
   const saveVisit = async () => {
+    if (visitSaving) return;
     if (!client?.id) {
       setTopError("اول پرونده مراجعه‌کننده را ذخیره کنید، سپس ویزیت ثبت کنید.");
       toast("اول پرونده مراجعه‌کننده را ذخیره کنید.", "error");
@@ -1139,13 +1146,16 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     }
     const nextErrors = validateVisit();
     if (Object.keys(nextErrors).length) {
-      setTopError("ویزیت ثبت نشد؛ خطاهای مشخص‌شده را اصلاح کنید.");
-      toast("ویزیت ثبت نشد؛ خطاهای فرم را بررسی کنید.", "error");
+      setTopError("ویزیت ذخیره نشد؛ خطاهای مشخص‌شده را اصلاح کنید.");
+      toast("ویزیت ذخیره نشد؛ خطاهای فرم را بررسی کنید.", "error");
       return;
     }
+    const wasEditing = editingVisitId !== null;
+    setVisitSaving(true);
     try {
       const detail = await invoke<VisitDetail>("save_visit_with_measurements", {
         visit: {
+          id: editingVisitId ?? undefined,
           client_id: client.id,
           track_id: visitForm.track_id,
           visit_date: coerceDateToIso(visitForm.visit_date),
@@ -1162,6 +1172,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           next_visit_time: visitForm.next_visit_enabled ? visitForm.next_visit_time : "",
           next_visit_status: visitForm.next_visit_enabled ? visitForm.next_visit_status : "",
           total_fee: 0,
+          request_id: wasEditing ? "" : visitRequestId,
         },
         measurements: {
           weight_kg: visitForm.weight_kg,
@@ -1178,31 +1189,23 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           notes: visitForm.notes,
         },
       });
-      const record = {
-        id: detail.measurements?.id,
-        client_id: client.id,
-        record_date: detail.visit.visit_date,
-        weight_kg: detail.measurements?.weight_kg ?? visitForm.weight_kg,
-        height_cm: detail.measurements?.height_cm ?? visitForm.height_cm,
-        notes: detail.measurements?.notes ?? visitForm.notes,
-        created_at: detail.visit.created_at,
-        updated_at: detail.visit.updated_at,
-      };
-      setVisits((items) => [...items, detail].sort((a, b) => a.visit.visit_date.localeCompare(b.visit.visit_date)));
-      setRecords((items) => [...items, record].sort((a, b) => a.record_date.localeCompare(b.record_date)));
+      const refreshedClient = await invoke<Client>("get_client_by_id", { id: client.id });
+      setVisits((items) => [...items.filter((item) => item.visit.id !== detail.visit.id), detail]
+        .sort((a, b) => `${a.visit.visit_date} ${a.visit.visit_time} ${a.visit.id ?? 0}`.localeCompare(`${b.visit.visit_date} ${b.visit.visit_time} ${b.visit.id ?? 0}`)));
+      setForm(refreshedClient);
+      onSaved(refreshedClient);
       if (detail.visit.id) setServiceForm((current) => ({ ...current, visitId: String(detail.visit.id) }));
-      const updatedClient = { ...form, weight_kg: record.weight_kg, height_cm: record.height_cm };
-      setForm(updatedClient);
-      await invoke<Client>("save_client", { client: updatedClient });
-      resetVisitForm(updatedClient);
+      resetVisitForm(refreshedClient);
       setTopError("");
-      setActiveTab("services");
+      setActiveTab(wasEditing ? "visits" : "services");
       setProfileReloadVersion((value) => value + 1);
-      toast("ویزیت ثبت شد؛ اکنون می‌توانید یک یا چند خدمت به آن اضافه کنید.");
+      toast(wasEditing ? "ویزیت و اندازه‌گیری‌های آن ویرایش شد." : "ویزیت ثبت شد؛ اکنون می‌توانید خدمات آن را اضافه کنید.");
     } catch (error) {
-      const message = getErrorMessage(error, "ثبت ویزیت انجام نشد؛ علت نامشخص است.");
+      const message = getErrorMessage(error, "ذخیره ویزیت انجام نشد؛ علت نامشخص است.");
       setTopError(message);
       toast(message, "error");
+    } finally {
+      setVisitSaving(false);
     }
   };
 
@@ -1466,6 +1469,77 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     } catch (error) { toast(getErrorMessage(error, "حذف خدمت انجام نشد."), "error"); }
   };
 
+  const editVisit = (item: VisitDetail) => {
+    if (!item.visit.id) return;
+    const measurements = item.measurements;
+    const extended = parseExtendedMeasurements(measurements?.custom_measurements_json);
+    const asText = (value?: number | null) => value === undefined || value === null ? "" : String(value);
+    setEditingVisitId(item.visit.id);
+    setVisitForm({
+      visit_date: item.visit.visit_date,
+      visit_time: item.visit.visit_time,
+      track_id: item.visit.track_id ?? null,
+      status: item.visit.status,
+      visit_type: (item.visit.visit_type ?? "initial") as VisitType,
+      visit_mode_key: item.visit.visit_mode_key ?? "in_person",
+      visit_mode_name_snapshot: item.visit.visit_mode_name_snapshot ?? visitModeDefaultLabels[item.visit.visit_mode_key ?? "in_person"] ?? "حضوری",
+      reason: item.visit.reason,
+      weight_kg: measurements?.weight_kg ?? form.weight_kg,
+      height_cm: measurements?.height_cm ?? form.height_cm,
+      notes: item.visit.clinical_notes,
+      next_visit_enabled: item.visit.next_visit_enabled,
+      next_visit_date: item.visit.next_visit_date,
+      next_visit_time: item.visit.next_visit_time,
+      next_visit_status: item.visit.next_visit_status || "scheduled",
+    });
+    setMeasurementForm({
+      ...emptyMeasurementForm,
+      body_fat_percent: asText(measurements?.body_fat_percent),
+      muscle_mass: asText(measurements?.muscle_mass),
+      visceral_fat: asText(measurements?.visceral_fat),
+      waist_cm: asText(measurements?.waist_cm),
+      abdomen_cm: asText(measurements?.abdomen_cm),
+      hip_cm: asText(measurements?.hip_cm),
+      chest_cm: asText(measurements?.chest_cm),
+      neck_cm: asText(measurements?.neck_cm),
+      ...Object.fromEntries(Object.entries(extended).map(([key, value]) => [key, asText(value)])),
+    } as MeasurementForm);
+    setTopError("");
+    window.setTimeout(() => visitFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  };
+
+  const deleteVisitItem = async (item: VisitDetail) => {
+    if (!item.visit.id || !client?.id) return;
+    const description = `${formatPersianDate(item.visit.visit_date)}${item.visit.visit_time ? ` ساعت ${item.visit.visit_time}` : ""}`;
+    if (!window.confirm(`ویزیت ${description} حذف شود؟ اندازه‌گیری‌ها و خدمات همین ویزیت حذف می‌شوند؛ فایل‌ها و محاسبات مرتبط در پرونده باقی می‌مانند.`)) return;
+    try {
+      const refreshedClient = await invoke<Client>("delete_visit", { id: item.visit.id });
+      setVisits((items) => items.filter((entry) => entry.visit.id !== item.visit.id));
+      setRecords((items) => items.filter((entry) => entry.id !== item.measurements?.id));
+      setVisitServices((current) => { const next = { ...current }; delete next[item.visit.id!]; return next; });
+      setForm(refreshedClient);
+      onSaved(refreshedClient);
+      if (editingVisitId === item.visit.id) resetVisitForm(refreshedClient);
+      setProfileReloadVersion((value) => value + 1);
+      toast("ویزیت حذف شد و وزن فعلی بر اساس جدیدترین ویزیت باقی‌مانده بازتنظیم شد.");
+    } catch (error) { toast(getErrorMessage(error, "حذف ویزیت انجام نشد."), "error"); }
+  };
+
+  const deleteClientPermanently = async () => {
+    if (!client?.id) return;
+    if (!window.confirm("حذف دائمی پرونده قابل بازگشت نیست و تمام ویزیت‌ها، محاسبات، برنامه‌ها و فایل‌های مراجع را حذف می‌کند. ادامه می‌دهید؟")) return;
+    const confirmation = window.prompt(`برای تأیید نهایی، نام مراجع را دقیق وارد کنید:\n${client.full_name}`);
+    if (confirmation?.trim() !== client.full_name.trim()) {
+      if (confirmation !== null) toast("نام واردشده با نام مراجع یکسان نبود؛ حذف لغو شد.", "error");
+      return;
+    }
+    try {
+      const message = await invoke<string>("delete_client_permanently", { id: client.id });
+      toast(message);
+      onDeleted();
+    } catch (error) { toast(getErrorMessage(error, "حذف دائمی پرونده انجام نشد."), "error"); }
+  };
+
   const latestRecord = records.length ? records[records.length - 1] : undefined;
   const previousRecord = records.length > 1 ? records[records.length - 2] : undefined;
   const weightDelta = latestRecord && previousRecord ? latestRecord.weight_kg - previousRecord.weight_kg : null;
@@ -1526,15 +1600,15 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
 
   const visitsPanel = client?.id ? (
     <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
-      <div className="rounded-card border border-warm-100 bg-warm-50 p-5 motion-enter">
+      <div ref={visitFormRef} className="rounded-card border border-warm-100 bg-warm-50 p-5 motion-enter">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <ClipboardList size={21} className="text-sage" />
-            <h2 className="text-lg font-bold">ثبت ویزیت</h2>
+            <h2 className="text-lg font-bold">{editingVisitId ? "ویرایش ویزیت" : "ثبت ویزیت"}</h2>
           </div>
           <span className="pill-soft">{visitTypeLabels[visitForm.visit_type]}</span>
         </div>
-        <p className="helper mt-2">ابتدا اطلاعات ضروری را ثبت کنید؛ اندازه‌گیری‌های تخصصی فقط در زیربخش مرتبط باز می‌شوند.</p>
+        <p className="helper mt-2">تاریخ می‌تواند مربوط به امروز یا هر تاریخ گذشته باشد. ثبت سابقه قدیمی، وزن فعلی مراجع را فقط در صورتی تغییر می‌دهد که جدیدترین ویزیت پرونده باشد.</p>
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <DateField label="تاریخ ویزیت" value={visitForm.visit_date} onChange={(value) => { setVisitForm({ ...visitForm, visit_date: value }); setErrors((current) => ({ ...current, visit_date: undefined })); }} error={errors.visit_date} />
           <TimeField label="ساعت" value={visitForm.visit_time} onChange={(value) => { setVisitForm({ ...visitForm, visit_time: value }); setErrors((current) => ({ ...current, visit_time: undefined })); }} error={errors.visit_time} />
@@ -1607,7 +1681,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           <label className="label">یادداشت ویزیت</label>
           <textarea className="control mt-2 min-h-24 w-full py-3" value={visitForm.notes} onChange={(event) => setVisitForm({ ...visitForm, notes: event.target.value })} />
         </div>
-        <div className="mt-5"><PrimaryButton icon={Plus} onClick={saveVisit}>ثبت ویزیت</PrimaryButton></div>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <PrimaryButton icon={editingVisitId ? Save : Plus} onClick={saveVisit} disabled={visitSaving}>{visitSaving ? "در حال ذخیره..." : editingVisitId ? "ذخیره تغییرات" : "ثبت ویزیت"}</PrimaryButton>
+          {editingVisitId && <SecondaryButton onClick={() => resetVisitForm(form)} disabled={visitSaving}>انصراف از ویرایش</SecondaryButton>}
+        </div>
       </div>
 
       <div className="rounded-card border border-warm-100 bg-white p-5 motion-enter motion-delay-1">
@@ -1615,7 +1692,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
           <div className="flex items-center gap-2"><CalendarDays size={21} className="text-sage" /><h2 className="text-lg font-bold">تاریخچه ویزیت‌ها</h2></div>
           <span className="text-xs text-warm-500">{formatNumber(visits.length || records.length)} ویزیت</span>
         </div>
-        {records.length === 0 ? <EmptyState icon={CalendarDays} title="هنوز ویزیتی ثبت نشده" text="اولین ویزیت را از فرم کنار صفحه ثبت کنید." /> : (
+        {visits.length === 0 ? <EmptyState icon={CalendarDays} title="هنوز ویزیتی ثبت نشده" text="اولین ویزیت را از فرم کنار صفحه ثبت کنید." /> : (
           <>
             <WeightHistory records={records} />
             <div className="mt-5 grid gap-3">
@@ -1640,6 +1717,10 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
                     </div>
                     {item.visit.clinical_notes && <p className="mt-3 text-xs leading-6 text-warm-500">{item.visit.clinical_notes}</p>}
                     {services.length > 0 && <div className="mt-3 flex flex-wrap gap-2">{services.map((service) => <span key={service.id ?? service.service_name_snapshot} className="service-mini-pill">{service.service_name_snapshot}</span>)}</div>}
+                    <div className="mt-4 flex flex-wrap gap-2 border-t border-warm-100 pt-3">
+                      <button type="button" className="mini-action" onClick={() => editVisit(item)}><Pencil size={15} /> ویرایش ویزیت</button>
+                      <button type="button" className="mini-action text-red-600" onClick={() => deleteVisitItem(item)}><Trash2 size={15} /> حذف ویزیت</button>
+                    </div>
                   </div>
                 );
               })}
@@ -1855,8 +1936,6 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
     </div>
   ) : null;
 
-  const profileCompletionItems = [Boolean(form.full_name), Boolean(form.phone), form.height_cm > 0, form.weight_kg > 0, visits.length > 0, Boolean(latestNutritionCalculation), Boolean(latestBodyAnalysisFile), Boolean(dietPlans.length)];
-  const profileCompletion = Math.round(profileCompletionItems.filter(Boolean).length / profileCompletionItems.length * 100);
   const allServices = Object.values(visitServices).flat();
   const latestServices = allServices.slice(-4).reverse();
   const activeTrackSet = new Set<CareTrackType>(careTracks.filter((track) => track.status === "active").map((track) => track.track_type));
@@ -1870,10 +1949,28 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       if (type === "combined") activeTrackSet.add("combined");
     });
   }
+  const requiresDiet = activeTrackSet.has("diet") || activeTrackSet.has("combined");
+  const requiresBodyAnalysis = activeTrackSet.has("body_analysis") || activeTrackSet.has("combined");
+  const requiresDevice = activeTrackSet.has("device") || activeTrackSet.has("combined");
+  const profileProgressItems = [
+    { label: "پرونده پایه ذخیره‌شده", done: Boolean(client?.id && form.full_name.trim()) },
+    { label: "مشخصات جسمانی پایه", done: form.age > 0 && form.height_cm > 0 && form.weight_kg > 0 },
+    { label: "هدف و سطح فعالیت", done: Boolean(form.goal && form.activity_level) },
+    { label: "اولین ویزیت واقعی", done: visits.length > 0 },
+  ];
+  const profilePathMilestones = [
+    ...(requiresDiet ? [
+      { label: "محاسبات تغذیه", done: Boolean(latestNutritionCalculation) },
+      { label: "برنامه غذایی", done: dietPlans.length > 0 },
+    ] : []),
+    ...(requiresBodyAnalysis ? [{ label: "بادی آنالیز", done: Boolean(latestBodyAnalysisVisit || latestBodyAnalysisFile) }] : []),
+    ...(requiresDevice ? [{ label: "خدمت یا جلسه دستگاه", done: visits.some((item) => item.visit.visit_type === "device" || item.visit.visit_type === "combined") || allServices.some((item) => item.service_group_snapshot === "device") }] : []),
+  ];
+  const profileCompletion = Math.round(profileProgressItems.filter((item) => item.done).length / profileProgressItems.length * 100);
   const summaryPanel = client?.id ? (
     <div className="grid gap-5">
       <section className="profile-hero-summary">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-center"><ProfileAvatar client={form} size="lg" /><div className="flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-2xl font-extrabold">{form.full_name}</h2><span className="pill-soft">{goalLabels[form.goal]}</span>{form.archived && <span className="pill-soft">بایگانی</span>}</div><p className="helper mt-2">{form.phone || "شماره تماس ثبت نشده"} · {genderLabels[form.gender]} · {formatNumber(form.age)} سال</p><div className="mt-4 flex flex-wrap gap-2">{Array.from(activeTrackSet).length ? Array.from(activeTrackSet).map((track) => <button type="button" key={track} className="track-chip" onClick={() => { setActiveTrack(track); setActiveTab("tracks"); }}>{careTrackLabels[track]}</button>) : <span className="text-xs text-warm-500">مسیر فعال بعد از اولین ویزیت ساخته می‌شود.</span>}</div></div><div className="completion-orb"><strong>{formatNumber(profileCompletion)}٪</strong><span>تکمیل پرونده</span></div></div>
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-center"><ProfileAvatar client={form} size="lg" /><div className="flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="text-2xl font-extrabold">{form.full_name}</h2><span className="pill-soft">{goalLabels[form.goal]}</span>{form.archived && <span className="pill-soft">بایگانی</span>}</div><p className="helper mt-2">{form.phone || "شماره تماس ثبت نشده"} · {genderLabels[form.gender]} · {formatNumber(form.age)} سال</p><div className="mt-4 flex flex-wrap gap-2">{Array.from(activeTrackSet).length ? Array.from(activeTrackSet).map((track) => <button type="button" key={track} className="track-chip" onClick={() => { setActiveTrack(track); setActiveTab("tracks"); }}>{careTrackLabels[track]}</button>) : <span className="text-xs text-warm-500">مسیر فعال بعد از اولین ویزیت ساخته می‌شود.</span>}</div></div><div className="completion-orb"><strong>{formatNumber(profileCompletion)}٪</strong><span>تکمیل پایه</span></div></div>
         <div className="macro-progress mt-5"><span style={{ width: `${profileCompletion}%` }} /></div>
       </section>
       <section className="summary-command-grid">
@@ -1894,7 +1991,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
       </section>
       <section className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
         <div className="rounded-card border border-warm-100 bg-white p-5"><div className="flex items-center justify-between"><div><h3 className="font-bold">تصویر کامل وضعیت فعلی</h3><p className="helper mt-1">شاخص‌های اصلی برای تصمیم‌گیری سریع متخصص.</p></div><Target className="text-sage" /></div><div className="measurement-overview mt-5"><div><span>هدف اصلی</span><strong>{goalLabels[form.goal]}</strong></div><div><span>سطح فعالیت</span><strong>{activityLabels[form.activity_level]}</strong></div><div><span>کالری هدف</span><strong>{latestNutritionCalculation ? `${formatNumber(latestNutritionCalculation.target_calories)} kcal` : "—"}</strong></div><div><span>برنامه غذایی</span><strong>{dietPlans[0]?.title || "ثبت نشده"}</strong></div><div><span>فایل‌ها</span><strong>{formatNumber(attachments.length)} فایل</strong></div><div><span>خدمات</span><strong>{formatNumber(allServices.length)} مورد</strong></div></div></div>
-        <div className="rounded-card border border-warm-100 bg-warm-50 p-5"><div className="flex items-center gap-2"><Trophy className="text-sage" /><h3 className="font-bold">پیشرفت پرونده</h3></div><div className="mt-4 grid gap-2"><div className={cn("achievement-row", visits.length && "done")}><CheckCircle2 /> اولین ویزیت</div><div className={cn("achievement-row", latestNutritionCalculation && "done")}><CheckCircle2 /> محاسبات ذخیره‌شده</div><div className={cn("achievement-row", latestBodyAnalysisFile && "done")}><CheckCircle2 /> بادی آنالیز</div><div className={cn("achievement-row", dietPlans.length && "done")}><CheckCircle2 /> برنامه غذایی</div></div></div>
+        <div className="rounded-card border border-warm-100 bg-warm-50 p-5"><div className="flex items-center gap-2"><Trophy className="text-sage" /><h3 className="font-bold">تکمیل پایه پرونده</h3></div><p className="helper mt-2">درصد فقط پرونده پایه و اولین ویزیت واقعی را می‌سنجد؛ مراحل درمان باعث کاهش یا افزایش ناگهانی این درصد نمی‌شوند.</p><div className="mt-4 grid gap-2">{profileProgressItems.map((item) => <div key={item.label} className={cn("achievement-row", item.done && "done")}><CheckCircle2 /> {item.label}</div>)}</div>{profilePathMilestones.length > 0 && <><div className="my-4 border-t border-warm-100" /><p className="text-xs font-bold text-warm-500">مراحل مسیر درمان (خارج از درصد)</p><div className="mt-3 grid gap-2">{profilePathMilestones.map((item) => <div key={item.label} className={cn("achievement-row", item.done && "done")}><CheckCircle2 /> {item.label}</div>)}</div></>}</div>
       </section>
       {form.notes && <section className="rounded-card border border-warm-100 bg-white p-5"><h3 className="font-bold">یادداشت مهم پرونده</h3><p className="mt-3 whitespace-pre-wrap text-sm leading-8 text-warm-500">{form.notes}</p></section>}
     </div>
@@ -1908,6 +2005,7 @@ function ClientProfileForm({ client, onBack, onSaved, toast }: { client: Client 
         action={
           <div className="flex flex-wrap gap-2">
             {client?.id && <SecondaryButton icon={FileText} onClick={exportClientReport}>پرونده چاپ/PDF</SecondaryButton>}
+            {client?.id && <SecondaryButton icon={Trash2} onClick={deleteClientPermanently}>حذف دائمی پرونده</SecondaryButton>}
             <PrimaryButton icon={Save} onClick={save}>ذخیره پرونده</PrimaryButton>
           </div>
         }
@@ -2158,6 +2256,13 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
   };
   const exportData = async () => { try { toast(`فایل پشتیبان سبک ساخته شد: ${await invoke<string>("export_data_backup")}`); } catch (error) { toast(getErrorMessage(error, "ساخت فایل پشتیبان سبک انجام نشد."), "error"); } };
   const restoreData = async () => { try { const selected = await open({ multiple: false, filters: [{ name: "Dietory backup", extensions: ["json"] }] }); if (!selected || Array.isArray(selected)) return; await invoke("restore_data_backup", { path: selected }); const restored = await invoke<Settings>("get_settings"); setSettings(restored); setForm(restored); toast("پشتیبان سبک بازیابی شد."); } catch (error) { toast(getErrorMessage(error, "بازیابی پشتیبان سبک انجام نشد."), "error"); } };
+  const cleanupAutoVisits = async () => {
+    if (!window.confirm("ویزیت‌های مصنوعی قدیمی با عنوان «ثبت اولیه مراجعه» شناسایی و حذف شوند؟ برنامه قبل از حذف، خودکار از دیتابیس پشتیبان می‌گیرد.")) return;
+    try {
+      const result = await invoke<{ deleted_count: number; backup_path: string }>("cleanup_auto_created_visits");
+      toast(result.deleted_count ? `${formatNumber(result.deleted_count)} ویزیت مصنوعی حذف شد. پشتیبان: ${result.backup_path}` : "ویزیت مصنوعی واجد شرایطی پیدا نشد.");
+    } catch (error) { toast(getErrorMessage(error, "پاک‌سازی ویزیت‌های مصنوعی انجام نشد."), "error"); }
+  };
   const exportSqlite = async () => { try { toast(`کپی SQLite ساخته شد: ${await invoke<string>("export_database")}`); } catch (error) { toast(getErrorMessage(error, "خروجی SQLite انجام نشد."), "error"); } };
 
   const resetServiceEditor = (group: ServiceGroup = (serviceEditor.group_key ?? "diet") as ServiceGroup) => setServiceEditor({ ...emptyServiceEditor, group_key: group });
@@ -2203,7 +2308,7 @@ function SettingsScreen({ settings, setSettings, toast }: { settings: Settings; 
         <section className="card p-6 motion-enter">
           <div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Database className="text-sage" /><h2 className="text-xl font-bold">پشتیبان‌گیری امن</h2></div><p className="helper mt-2">پشتیبان کامل، دیتابیس و تمام فایل‌های مراجعین را باهم نگه می‌دارد و گزینه پیشنهادی قبل از هر آپدیت است.</p></div><span className="pill-soft">پیشنهادی</span></div>
           <div className="mt-5 grid gap-3 md:grid-cols-2"><button type="button" className="backup-action backup-action-primary" onClick={exportCompleteBackup}><Download size={22} /><span><strong>ساخت پشتیبان کامل</strong><small>دیتابیس، پرونده‌ها، تصاویر، PDFها و دارایی‌های برند</small></span></button><button type="button" className="backup-action" onClick={restoreCompleteBackup}><FileUp size={22} /><span><strong>بازیابی پشتیبان کامل</strong><small>انتخاب پوشه‌ای که فایل manifest.json دارد</small></span></button></div>
-          <details className="advanced-backup mt-4"><summary>گزینه‌های فنی و سبک</summary><div className="mt-4 flex flex-wrap gap-3"><SecondaryButton icon={Download} onClick={exportData}>خروجی JSON سبک</SecondaryButton><SecondaryButton icon={Database} onClick={exportSqlite}>فقط SQLite</SecondaryButton><SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی JSON قدیمی</SecondaryButton></div></details>
+          <details className="advanced-backup mt-4"><summary>گزینه‌های فنی، سبک و پاک‌سازی</summary><div className="mt-4 flex flex-wrap gap-3"><SecondaryButton icon={Download} onClick={exportData}>خروجی JSON سبک</SecondaryButton><SecondaryButton icon={Database} onClick={exportSqlite}>فقط SQLite</SecondaryButton><SecondaryButton icon={FileUp} onClick={restoreData}>بازیابی JSON قدیمی</SecondaryButton><SecondaryButton icon={Trash2} onClick={cleanupAutoVisits}>پاک‌سازی ویزیت‌های ثبت اولیه مصنوعی</SecondaryButton></div></details>
         </section>
       </div>}
 
@@ -2276,12 +2381,12 @@ function TabButton({ active, children, onClick }: { active: boolean; children: R
   );
 }
 
-function PrimaryButton({ children, onClick, icon: Icon, type = "button" }: { children: React.ReactNode; onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void; icon?: typeof Plus; type?: "button" | "submit" }) {
-  return <button type={type} onClick={onClick} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control bg-[var(--primary)] px-5 text-sm font-semibold text-white shadow-lift hover:-translate-y-0.5">{Icon && <Icon size={19} />}{children}</button>;
+function PrimaryButton({ children, onClick, icon: Icon, type = "button", disabled = false }: { children: React.ReactNode; onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void; icon?: typeof Plus; type?: "button" | "submit"; disabled?: boolean }) {
+  return <button type={type} onClick={onClick} disabled={disabled} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control bg-[var(--primary)] px-5 text-sm font-semibold text-white shadow-lift hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0">{Icon && <Icon size={19} />}{children}</button>;
 }
 
-function SecondaryButton({ children, onClick, icon: Icon }: { children: React.ReactNode; onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void; icon?: typeof Plus }) {
-  return <button onClick={onClick} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control border border-warm-100 bg-paper px-5 text-sm font-semibold text-charcoal hover:bg-warm-50">{Icon && <Icon size={19} />}{children}</button>;
+function SecondaryButton({ children, onClick, icon: Icon, disabled = false }: { children: React.ReactNode; onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void; icon?: typeof Plus; disabled?: boolean }) {
+  return <button type="button" onClick={onClick} disabled={disabled} className="soft-transition inline-flex h-12 items-center justify-center gap-2 rounded-control border border-warm-100 bg-paper px-5 text-sm font-semibold text-charcoal hover:bg-warm-50 disabled:cursor-not-allowed disabled:opacity-60">{Icon && <Icon size={19} />}{children}</button>;
 }
 
 function Stat({ label, value, icon: Icon, hint }: { label: string; value?: number; icon: typeof Users; hint?: string }) {
@@ -2461,6 +2566,9 @@ function DateField({ label, value, onChange, error }: { label: string; value: st
     });
   };
   const selected = jalaliPartsFromIso(normalizedValue);
+  const currentJalaliYear = jalaliPartsFromIso(todayIsoDate()).jy;
+  const yearOptions = Array.from(new Set([selected.jy, ...Array.from({ length: 106 }, (_, index) => currentJalaliYear + 5 - index)]))
+    .sort((a, b) => b - a);
   const days = Array.from({ length: daysInJalaliMonth(visibleMonth.year, visibleMonth.month) }, (_, index) => index + 1);
   const firstDayIso = jalaliInputToIso(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}/01`);
   const firstDayOffset = firstDayIso ? (new Date(`${firstDayIso}T00:00:00`).getDay() + 1) % 7 : 0;
@@ -2477,7 +2585,10 @@ function DateField({ label, value, onChange, error }: { label: string; value: st
         <div className="popover-panel calendar-popover absolute z-40 mt-2 w-80 p-4">
           <div className="mb-4 flex items-center justify-between">
             <button type="button" className="calendar-nav" onClick={() => moveMonth(-1)} aria-label="ماه قبل"><ChevronRight size={18} /></button>
-            <div className="text-center"><strong>{persianMonthNames[visibleMonth.month - 1]}</strong><span className="numbers mr-2 text-sm text-warm-500">{toPersianDigits(visibleMonth.year)}</span></div>
+            <div className="flex items-center gap-2">
+              <select className="rounded-control border border-warm-100 bg-white px-2 py-1 text-xs" value={visibleMonth.month} onChange={(event) => setVisibleMonth((current) => ({ ...current, month: Number(event.target.value) }))}>{persianMonthNames.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select>
+              <select className="numbers rounded-control border border-warm-100 bg-white px-2 py-1 text-xs" value={visibleMonth.year} onChange={(event) => setVisibleMonth((current) => ({ ...current, year: Number(event.target.value) }))}>{yearOptions.map((year) => <option key={year} value={year}>{toPersianDigits(year)}</option>)}</select>
+            </div>
             <button type="button" className="calendar-nav" onClick={() => moveMonth(1)} aria-label="ماه بعد"><ChevronLeft size={18} /></button>
           </div>
           <div className="calendar-weekdays">{persianWeekdayShortLabels.map((day) => <span key={day}>{day}</span>)}</div>

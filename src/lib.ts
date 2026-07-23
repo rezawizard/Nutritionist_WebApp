@@ -254,7 +254,11 @@ export function formatPersianDate(date: Date | string = new Date()) {
 }
 
 export function todayIsoDate() {
-  return new Date().toISOString().slice(0, 10);
+  return localDateToIso(new Date());
+}
+
+function localDateToIso(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 const faDigits = "۰۱۲۳۴۵۶۷۸۹";
@@ -402,7 +406,7 @@ export function daysInJalaliMonth(year: number, month: number) {
 export function addDaysToIso(iso: string, days: number) {
   const base = isValidIsoDate(iso) ? new Date(`${iso}T00:00:00`) : new Date();
   base.setDate(base.getDate() + days);
-  return base.toISOString().slice(0, 10);
+  return localDateToIso(base);
 }
 
 export function startOfMonthIso(iso: string) {
@@ -412,7 +416,7 @@ export function startOfMonthIso(iso: string) {
 
 export function endOfMonthIso(iso: string) {
   const base = isValidIsoDate(iso) ? new Date(`${iso}T00:00:00`) : new Date();
-  return new Date(base.getFullYear(), base.getMonth() + 1, 0).toISOString().slice(0, 10);
+  return localDateToIso(new Date(base.getFullYear(), base.getMonth() + 1, 0));
 }
 
 export function safeFileSegment(value: string, fallback = "client") {

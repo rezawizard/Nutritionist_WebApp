@@ -70,6 +70,7 @@ export interface Visit {
   next_visit_time: string;
   next_visit_status: string;
   total_fee: number;
+  request_id?: string;
   created_at?: string;
   updated_at?: string;
 }
