@@ -1,16 +1,17 @@
-Dietory 5.0.0 verification
+Dietory 5.3.0 verification
 
-Frontend:
-- npm ci: PASS
-- npm run build (TypeScript + Vite): PASS
-- JSON configuration parse: PASS
-- Tauri handler command presence audit: PASS (44/44 functions found)
-- Legacy unused source files removed from clean source: PASS
-
-Not executed in this environment:
-- cargo check / cargo build
-- Tauri NSIS installer build
-- Windows installation/runtime test
+Completed in preparation environment:
+- JSON configuration parsing: PASS
+- GitHub Actions YAML parsing: PASS
+- TypeScript/TSX syntax transpilation: PASS
+- Frontend-to-Rust command bridge static check: PASS (no missing command)
+- Rust delimiter/lexical structural scan: PASS
+- Version consistency static check: PASS
+- ZIP integrity and SHA-256: generated at packaging time
 
 Required final validation:
-Run GitHub Actions workflow "USE THIS - Dietory 5.0.0 Final Installer" and inspect any Rust compiler output before customer delivery.
+- Run GitHub Actions workflow: USE THIS - Dietory 5.3.0 Final Installer
+- Build frontend: green
+- Check Rust backend: green
+- Build Tauri installer: green
+- Complete CUSTOMER_TEST_CHECKLIST_V53_FA.md on a copied/test database before production use.

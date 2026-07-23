@@ -1,0 +1,26 @@
+فایل‌های کدی لازم برای آپدیت Dietory 5.3.0
+
+package.json
+package-lock.json
+src/App.tsx
+src/types.ts
+src-tauri/Cargo.toml
+src-tauri/Cargo.lock
+src-tauri/tauri.conf.json
+src-tauri/src/lib.rs
+.github/workflows/windows-installer.yml
+installer/Build-USB-Package.ps1
+installer/Customer-Install.vbs
+installer/Customer-Install-Silent.vbs
+installer/Install-on-Desktop.vbs
+installer/Silent-Install-on-Desktop.vbs
+installer/README-USB.txt
+installer/UPDATE-CURRENT-APP.vbs
+installer/UNINSTALL-CURRENT-APP.vbs
+installer/START-HERE-DIETORY.hta
+
+فایل‌های راهنما که نیاز به جایگزینی در پروژه ندارند:
+APPLY_INSTRUCTIONS_V53_FA.md
+CUSTOMER_TEST_CHECKLIST_V53_FA.md
+BUILD_VERIFICATION_V53.txt
+CHANGELOG_V53_FA.md
