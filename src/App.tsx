@@ -772,11 +772,12 @@ function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit,
       : settings.clinic_name.trim()
         ? `به ${settings.clinic_name.trim()} خوش آمدید.`
         : "به سامانه یکپارچه مدیریت کلینیک تغذیه خوش آمدید.";
+  const dashboardDateText = `امروز ${formatPersianDate().replace(/,/g, "،").replace("پنجشنبه", "پنج‌شنبه")} است`;
 
   return (
     <>
       <header className="mb-7 motion-enter">
-        <h1 className="text-3xl font-extrabold leading-tight text-white md:text-4xl">امروز {formatPersianDate()} است.</h1>
+        <h1 dir="rtl" className="text-3xl font-extrabold leading-tight tracking-tight text-white md:text-4xl">{dashboardDateText}</h1>
         <p className="mt-3 text-base font-semibold leading-8 text-white/85 md:text-lg">{welcomeText}</p>
       </header>
       {dashboardError && <div className="mb-5"><ErrorSummary message={dashboardError} /></div>}
