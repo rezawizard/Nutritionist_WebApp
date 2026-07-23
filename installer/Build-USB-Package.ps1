@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $releaseDir = Join-Path $root "release-usb"
 $bundleDir = Join-Path $root "src-tauri\target\release\bundle\nsis"
-$setupName = "Dietory-5.1.0-Setup.exe"
+$setupName = "Dietory-5.2.0-Setup.exe"
 $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
 
 Set-Location $root
