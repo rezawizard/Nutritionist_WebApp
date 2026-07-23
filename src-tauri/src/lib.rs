@@ -459,6 +459,27 @@ struct Settings {
     reports_completed_only: bool,
     #[serde(default = "default_true")]
     reports_use_service_revenue: bool,
+    #[serde(default)]
+    backup_directory: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupStatus {
+    path: String,
+    exists: bool,
+    created_at: String,
+    clients: i64,
+    visits: i64,
+    attachments: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct RestoreCompleteResult {
+    safety_backup_path: String,
+    clients: i64,
+    visits: i64,
+    attachments: i64,
+    remapped_paths: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -1104,6 +1125,7 @@ fn init_db(conn: &Connection) -> Result<(), String> {
     write_default_setting(conn, "report_show_contact", "1")?;
     write_default_setting(conn, "reports_completed_only", "1")?;
     write_default_setting(conn, "reports_use_service_revenue", "1")?;
+    write_default_setting(conn, "backup_directory", "")?;
     if read_setting_or(conn, "password_hash", "")?.is_empty() {
         write_setting(conn, "password_hash", &legacy_hash_password("admin"))?;
         write_setting(conn, "password_algorithm", "sha256")?;
@@ -3673,6 +3695,7 @@ fn get_settings(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
         report_show_contact: read_setting_or(&conn, "report_show_contact", "1")? != "0",
         reports_completed_only: read_setting_or(&conn, "reports_completed_only", "1")? != "0",
         reports_use_service_revenue: read_setting_or(&conn, "reports_use_service_revenue", "1")? != "0",
+        backup_directory: read_setting_or(&conn, "backup_directory", "")?,
     })
 }
 
@@ -3688,6 +3711,7 @@ fn save_settings(state: tauri::State<'_, AppState>, settings: Settings) -> Resul
         ("logo_path", settings.logo_path.as_str()),
         ("background_image_path", settings.background_image_path.as_str()),
         ("username", settings.username.as_str()),
+        ("backup_directory", settings.backup_directory.as_str()),
     ];
 
     for (key, value) in values {
@@ -3820,14 +3844,63 @@ fn copy_directory_recursive(source: &Path, target: &Path) -> Result<(), String> 
     Ok(())
 }
 
-fn export_complete_backup_inner(state: &AppState) -> Result<String, String> {
-    let base_dir = dirs_next::document_dir()
-        .or_else(dirs_next::desktop_dir)
-        .ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?
-        .join("Dietory Backups");
-    fs::create_dir_all(&base_dir).map_err(|err| err.to_string())?;
-    let backup_dir = base_dir.join(format!("Dietory-Backup-{}", Utc::now().format("%Y%m%d-%H%M%S")));
-    fs::create_dir_all(&backup_dir).map_err(|err| err.to_string())?;
+fn configured_backup_root(state: &AppState) -> Result<PathBuf, String> {
+    let configured = {
+        let conn = state.conn.lock().map_err(|err| err.to_string())?;
+        read_setting_or(&conn, "backup_directory", "")?
+    };
+    let root = if configured.trim().is_empty() {
+        dirs_next::document_dir()
+            .or_else(dirs_next::desktop_dir)
+            .ok_or_else(|| "مسیر مناسب برای ذخیره پشتیبان پیدا نشد.".to_string())?
+            .join("Dietory Backups")
+    } else {
+        PathBuf::from(configured.trim())
+    };
+    let app_dir = state.db_path.parent().ok_or_else(|| "پوشه داده‌های برنامه پیدا نشد.".to_string())?;
+    if root.starts_with(app_dir) {
+        return Err("پوشه پشتیبان نباید داخل پوشه داده‌های خود Dietory باشد.".to_string());
+    }
+    fs::create_dir_all(&root).map_err(|err| format!("ساخت پوشه اصلی پشتیبان انجام نشد: {err}"))?;
+    Ok(root)
+}
+
+fn sha256_file(path: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let mut file = fs::File::open(path).map_err(|err| format!("بازکردن فایل برای بررسی سلامت انجام نشد: {err}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|err| format!("خواندن فایل برای بررسی سلامت انجام نشد: {err}"))?;
+        if count == 0 { break; }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_backup_file_entries(root: &Path, current: &Path, output: &mut Vec<serde_json::Value>) -> Result<(), String> {
+    for entry in fs::read_dir(current).map_err(|err| format!("خواندن فایل‌های پشتیبان انجام نشد: {err}"))? {
+        let entry = entry.map_err(|err| err.to_string())?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_backup_file_entries(root, &path, output)?;
+        } else if path.file_name().and_then(|value| value.to_str()) != Some("manifest.json") {
+            let relative = path.strip_prefix(root).map_err(|err| err.to_string())?;
+            output.push(serde_json::json!({
+                "path": relative.to_string_lossy().replace('\\', "/"),
+                "size": fs::metadata(&path).map_err(|err| err.to_string())?.len(),
+                "sha256": sha256_file(&path)?,
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn create_complete_backup_at(state: &AppState, backup_dir: &Path, backup_kind: &str) -> Result<(), String> {
+    if backup_dir.exists() {
+        fs::remove_dir_all(backup_dir).map_err(|err| format!("پاک‌سازی نسخه قبلی پشتیبان انجام نشد: {err}"))?;
+    }
+    fs::create_dir_all(backup_dir).map_err(|err| format!("ساخت پوشه پشتیبان انجام نشد: {err}"))?;
 
     let db_target = backup_dir.join("nutritionist.sqlite");
     {
@@ -3843,24 +3916,147 @@ fn export_complete_backup_inner(state: &AppState) -> Result<String, String> {
         if source.exists() { copy_directory_recursive(&source, &backup_dir.join(folder))?; }
     }
 
-    let conn = state.conn.lock().map_err(|err| err.to_string())?;
-    let client_count: i64 = conn.query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0)).unwrap_or(0);
-    let visit_count: i64 = conn.query_row("SELECT COUNT(*) FROM visits", [], |row| row.get(0)).unwrap_or(0);
-    let attachment_count: i64 = conn.query_row("SELECT COUNT(*) FROM attachments", [], |row| row.get(0)).unwrap_or(0);
-    drop(conn);
+    let (client_count, visit_count, attachment_count) = {
+        let conn = state.conn.lock().map_err(|err| err.to_string())?;
+        (
+            conn.query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0)).unwrap_or(0),
+            conn.query_row("SELECT COUNT(*) FROM visits", [], |row| row.get(0)).unwrap_or(0),
+            conn.query_row("SELECT COUNT(*) FROM attachments", [], |row| row.get(0)).unwrap_or(0),
+        )
+    };
+    let mut files = Vec::new();
+    collect_backup_file_entries(backup_dir, backup_dir, &mut files)?;
     let manifest = serde_json::json!({
         "app": "Dietory",
+        "format_version": 2,
         "version": env!("CARGO_PKG_VERSION"),
+        "backup_kind": backup_kind,
         "created_at": now(),
+        "source_app_data_dir": app_dir.to_string_lossy(),
         "database": "nutritionist.sqlite",
         "clients": client_count,
         "visits": visit_count,
         "attachments": attachment_count,
-        "restore_hint": "این پوشه را در بخش بازیابی کامل Dietory انتخاب کنید."
+        "files": files,
+        "restore_hint": "این پوشه را در بخش بازیابی کامل Dietory انتخاب کنید. مسیر فایل‌ها هنگام بازیابی روی سیستم جدید خودکار اصلاح می‌شود."
     });
     fs::write(backup_dir.join("manifest.json"), serde_json::to_string_pretty(&manifest).map_err(|err| err.to_string())?)
         .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn timestamped_backup(state: &AppState, category: &str, prefix: &str, kind: &str) -> Result<String, String> {
+    let root = configured_backup_root(state)?.join(category);
+    fs::create_dir_all(&root).map_err(|err| err.to_string())?;
+    let backup_dir = root.join(format!("{}-{}", prefix, Utc::now().format("%Y%m%d-%H%M%S")));
+    create_complete_backup_at(state, &backup_dir, kind)?;
     Ok(backup_dir.to_string_lossy().to_string())
+}
+
+fn export_complete_backup_inner(state: &AppState) -> Result<String, String> {
+    timestamped_backup(state, "Manual", "Dietory-Backup", "manual")
+}
+
+fn create_auto_backup_inner(state: &AppState) -> Result<String, String> {
+    let root = configured_backup_root(state)?;
+    let latest = root.join("Dietory-Auto-Backup-Latest");
+    let previous = root.join("Dietory-Auto-Backup-Previous");
+    let staging = root.join(".Dietory-Auto-Backup-Next");
+    create_complete_backup_at(state, &staging, "automatic-on-exit")?;
+    if previous.exists() { fs::remove_dir_all(&previous).map_err(|err| err.to_string())?; }
+    if latest.exists() { fs::rename(&latest, &previous).map_err(|err| format!("جابه‌جایی پشتیبان قبلی انجام نشد: {err}"))?; }
+    if let Err(error) = fs::rename(&staging, &latest) {
+        if previous.exists() && !latest.exists() { let _ = fs::rename(&previous, &latest); }
+        return Err(format!("ثبت پشتیبان اصلی جدید انجام نشد: {error}"));
+    }
+    Ok(latest.to_string_lossy().to_string())
+}
+
+fn read_backup_status(state: &AppState) -> Result<BackupStatus, String> {
+    let path = configured_backup_root(state)?.join("Dietory-Auto-Backup-Latest");
+    let manifest_path = path.join("manifest.json");
+    if !manifest_path.exists() {
+        return Ok(BackupStatus { path: path.to_string_lossy().to_string(), exists: false, created_at: String::new(), clients: 0, visits: 0, attachments: 0 });
+    }
+    let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&manifest_path).map_err(|err| err.to_string())?)
+        .map_err(|err| format!("خواندن مشخصات پشتیبان انجام نشد: {err}"))?;
+    Ok(BackupStatus {
+        path: path.to_string_lossy().to_string(),
+        exists: true,
+        created_at: manifest.get("created_at").and_then(|value| value.as_str()).unwrap_or("").to_string(),
+        clients: manifest.get("clients").and_then(|value| value.as_i64()).unwrap_or(0),
+        visits: manifest.get("visits").and_then(|value| value.as_i64()).unwrap_or(0),
+        attachments: manifest.get("attachments").and_then(|value| value.as_i64()).unwrap_or(0),
+    })
+}
+
+fn validate_complete_backup(backup_dir: &Path) -> Result<serde_json::Value, String> {
+    let source_db = backup_dir.join("nutritionist.sqlite");
+    let manifest_path = backup_dir.join("manifest.json");
+    if !source_db.exists() || !manifest_path.exists() {
+        return Err("این پوشه یک پشتیبان کامل معتبر Dietory نیست.".to_string());
+    }
+    let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&manifest_path).map_err(|err| err.to_string())?)
+        .map_err(|err| format!("فایل manifest پشتیبان معتبر نیست: {err}"))?;
+    if manifest.get("app").and_then(|value| value.as_str()).map(|value| value.eq_ignore_ascii_case("Dietory")) != Some(true) {
+        return Err("این پشتیبان متعلق به Dietory نیست.".to_string());
+    }
+    if let Some(files) = manifest.get("files").and_then(|value| value.as_array()) {
+        for item in files {
+            let relative = item.get("path").and_then(|value| value.as_str()).ok_or_else(|| "فهرست فایل‌های پشتیبان ناقص است.".to_string())?;
+            let expected_hash = item.get("sha256").and_then(|value| value.as_str()).ok_or_else(|| "هش سلامت یکی از فایل‌های پشتیبان وجود ندارد.".to_string())?;
+            let file_path = backup_dir.join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+            if !file_path.exists() { return Err(format!("فایل «{relative}» در پشتیبان وجود ندارد.")); }
+            if sha256_file(&file_path)? != expected_hash { return Err(format!("فایل «{relative}» آسیب دیده یا تغییر کرده است.")); }
+        }
+    }
+    let source = Connection::open(&source_db).map_err(|err| format!("بازکردن دیتابیس پشتیبان انجام نشد: {err}"))?;
+    let integrity: String = source.query_row("PRAGMA integrity_check", [], |row| row.get(0)).map_err(|err| err.to_string())?;
+    if integrity.to_lowercase() != "ok" { return Err(format!("دیتابیس پشتیبان سالم نیست: {integrity}")); }
+    Ok(manifest)
+}
+
+fn remap_app_owned_path(raw: &str, app_dir: &Path) -> Option<String> {
+    if raw.trim().is_empty() { return None; }
+    let normalized = raw.replace('\\', "/");
+    let segments: Vec<&str> = normalized.split('/').filter(|segment| !segment.is_empty()).collect();
+    let index = segments.iter().position(|segment| segment.eq_ignore_ascii_case("DietoyData") || segment.eq_ignore_ascii_case("assets"))?;
+    let mut mapped = app_dir.to_path_buf();
+    for segment in &segments[index..] { mapped.push(segment); }
+    Some(mapped.to_string_lossy().to_string())
+}
+
+fn rewrite_restored_paths(conn: &Connection, app_dir: &Path) -> Result<i64, String> {
+    let mut changed = 0_i64;
+    let clients: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare("SELECT id, profile_image_path FROM clients WHERE TRIM(profile_image_path) <> ''").map_err(|err| err.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
+        rows
+    };
+    for (id, path) in clients {
+        if let Some(mapped) = remap_app_owned_path(&path, app_dir) {
+            if mapped != path { conn.execute("UPDATE clients SET profile_image_path=?1 WHERE id=?2", params![mapped, id]).map_err(|err| err.to_string())?; changed += 1; }
+        }
+    }
+    let attachments: Vec<(i64, String)> = {
+        let mut stmt = conn.prepare("SELECT id, local_path FROM attachments WHERE TRIM(local_path) <> ''").map_err(|err| err.to_string())?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?))).map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>().map_err(|err| err.to_string())?;
+        rows
+    };
+    for (id, path) in attachments {
+        if let Some(mapped) = remap_app_owned_path(&path, app_dir) {
+            if mapped != path { conn.execute("UPDATE attachments SET local_path=?1 WHERE id=?2", params![mapped, id]).map_err(|err| err.to_string())?; changed += 1; }
+        }
+    }
+    for key in ["logo_path", "background_image_path"] {
+        let path = read_setting_or(conn, key, "")?;
+        if let Some(mapped) = remap_app_owned_path(&path, app_dir) {
+            if mapped != path { write_setting(conn, key, &mapped)?; changed += 1; }
+        }
+    }
+    Ok(changed)
 }
 
 #[tauri::command]
@@ -3869,14 +4065,27 @@ fn export_complete_backup(state: tauri::State<'_, AppState>) -> Result<String, S
 }
 
 #[tauri::command]
-fn restore_complete_backup(state: tauri::State<'_, AppState>, path: String) -> Result<String, String> {
-    let selected = PathBuf::from(path);
-    let backup_dir = if selected.is_dir() { selected } else { selected.parent().map(Path::to_path_buf).ok_or_else(|| "پوشه پشتیبان معتبر نیست.".to_string())? };
-    let source_db = backup_dir.join("nutritionist.sqlite");
-    let manifest = backup_dir.join("manifest.json");
-    if !source_db.exists() || !manifest.exists() { return Err("این پوشه یک پشتیبان کامل معتبر Dietory نیست.".to_string()); }
+fn create_auto_backup(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    create_auto_backup_inner(state.inner())
+}
 
-    let safety_path = export_complete_backup_inner(state.inner())?;
+#[tauri::command]
+fn get_auto_backup_status(state: tauri::State<'_, AppState>) -> Result<BackupStatus, String> {
+    read_backup_status(state.inner())
+}
+
+#[tauri::command]
+fn open_backup_folder(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let root = configured_backup_root(state.inner())?;
+    open_path_with_system(root)
+}
+
+fn apply_complete_backup(
+    state: &AppState,
+    backup_dir: &Path,
+    current_backup_root: &Path,
+) -> Result<(i64, i64, i64, i64), String> {
+    let source_db = backup_dir.join("nutritionist.sqlite");
     {
         let source = Connection::open(&source_db).map_err(|err| format!("بازکردن دیتابیس پشتیبان انجام نشد: {err}"))?;
         let mut destination = state.conn.lock().map_err(|err| err.to_string())?;
@@ -3889,13 +4098,65 @@ fn restore_complete_backup(state: tauri::State<'_, AppState>, path: String) -> R
     let app_dir = state.db_path.parent().ok_or_else(|| "پوشه داده‌های برنامه پیدا نشد.".to_string())?;
     for folder in ["DietoyData", "assets"] {
         let source = backup_dir.join(folder);
+        let target = app_dir.join(folder);
+        if target.exists() {
+            fs::remove_dir_all(&target).map_err(|err| format!("پاک‌سازی فایل‌های قبلی انجام نشد: {err}"))?;
+        }
         if source.exists() {
-            let target = app_dir.join(folder);
-            if target.exists() { fs::remove_dir_all(&target).map_err(|err| format!("پاک‌سازی فایل‌های قبلی انجام نشد: {err}"))?; }
             copy_directory_recursive(&source, &target)?;
         }
     }
-    Ok(safety_path)
+
+    let conn = state.conn.lock().map_err(|err| err.to_string())?;
+    let remapped_paths = rewrite_restored_paths(&conn, app_dir)?;
+    write_setting(&conn, "backup_directory", &current_backup_root.to_string_lossy())?;
+    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0)).map_err(|err| err.to_string())?;
+    if integrity.to_lowercase() != "ok" {
+        return Err(format!("دیتابیس بازیابی‌شده سالم نیست: {integrity}"));
+    }
+    Ok((
+        remapped_paths,
+        conn.query_row("SELECT COUNT(*) FROM clients", [], |row| row.get(0)).unwrap_or(0),
+        conn.query_row("SELECT COUNT(*) FROM visits", [], |row| row.get(0)).unwrap_or(0),
+        conn.query_row("SELECT COUNT(*) FROM attachments", [], |row| row.get(0)).unwrap_or(0),
+    ))
+}
+
+#[tauri::command]
+fn restore_complete_backup(state: tauri::State<'_, AppState>, path: String) -> Result<RestoreCompleteResult, String> {
+    let selected = PathBuf::from(path);
+    let backup_dir = if selected.is_dir() {
+        selected
+    } else {
+        selected.parent().map(Path::to_path_buf).ok_or_else(|| "پوشه پشتیبان معتبر نیست.".to_string())?
+    };
+    validate_complete_backup(&backup_dir)?;
+    let current_backup_root = configured_backup_root(state.inner())?;
+    let safety_path = timestamped_backup(state.inner(), "Safety", "Before-Restore", "safety-before-restore")?;
+
+    let apply_result = apply_complete_backup(state.inner(), &backup_dir, &current_backup_root);
+    let (remapped_paths, clients, visits, attachments) = match apply_result {
+        Ok(result) => result,
+        Err(restore_error) => {
+            let safety_dir = PathBuf::from(&safety_path);
+            let rollback_result = validate_complete_backup(&safety_dir)
+                .and_then(|_| apply_complete_backup(state.inner(), &safety_dir, &current_backup_root));
+            return match rollback_result {
+                Ok(_) => Err(format!("بازیابی انجام نشد و اطلاعات قبلی به‌طور خودکار برگردانده شد: {restore_error}")),
+                Err(rollback_error) => Err(format!(
+                    "بازیابی انجام نشد و بازگردانی خودکار نیز کامل نشد. پشتیبان ایمنی در «{safety_path}» موجود است. خطای بازیابی: {restore_error}؛ خطای بازگردانی: {rollback_error}"
+                )),
+            };
+        }
+    };
+
+    Ok(RestoreCompleteResult {
+        safety_backup_path: safety_path,
+        clients,
+        visits,
+        attachments,
+        remapped_paths,
+    })
 }
 
 #[tauri::command]
@@ -4053,6 +4314,7 @@ pub fn run() {
             archive_client,
             change_credentials,
             cleanup_auto_created_visits,
+            create_auto_backup,
             delete_attachment,
             delete_client_permanently,
             delete_visit,
@@ -4064,6 +4326,7 @@ pub fn run() {
             export_complete_backup,
             export_data_backup,
             export_database,
+            get_auto_backup_status,
             get_client_profile_bundle,
             get_client_by_id,
             get_security_status,
@@ -4086,6 +4349,7 @@ pub fn run() {
             login,
             monthly_report,
             open_attachment,
+            open_backup_folder,
             open_client_folder,
             read_attachment_preview,
             restore_complete_backup,
