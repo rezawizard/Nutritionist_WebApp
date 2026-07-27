@@ -242,15 +242,34 @@ export function stripNumericSeparators(value: string) {
   return value.replace(/([۰-۹٠-٩0-9])[\u066C٬,،]([۰-۹٠-٩0-9])/g, "$1$2");
 }
 
+function dateForPersianDisplay(value: Date | string) {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? new Date() : value;
+  const trimmed = value.trim();
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const month = Number(dateOnly[2]);
+    const day = Number(dateOnly[3]);
+    const localDate = new Date(year, month - 1, day, 12, 0, 0);
+    if (localDate.getFullYear() === year && localDate.getMonth() === month - 1 && localDate.getDate() === day) return localDate;
+  }
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
 export function formatPersianDate(date: Date | string = new Date()) {
-  const target = typeof date === "string" ? new Date(`${date}T00:00:00`) : date;
-  const formatted = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+  const parts = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
     weekday: "long",
     year: "numeric",
     month: "long",
     day: "numeric",
-  }).format(Number.isNaN(target.getTime()) ? new Date() : target);
-  return stripNumericSeparators(formatted);
+  }).formatToParts(dateForPersianDisplay(date));
+  const valueOf = (type: "weekday" | "day" | "month" | "year") => parts.find((part) => part.type === type)?.value ?? "";
+  const weekday = valueOf("weekday").replace("پنجشنبه", "پنج‌شنبه");
+  const day = stripNumericSeparators(valueOf("day"));
+  const month = valueOf("month");
+  const year = stripNumericSeparators(valueOf("year"));
+  return `\u2067${weekday}، ${day} ${month} ${year}\u2069`.trim();
 }
 
 export function todayIsoDate() {
