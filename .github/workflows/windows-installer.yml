@@ -4,13 +4,16 @@ run-name: USE THIS - Dietory 5.3.0 Final Installer · ${{ github.ref_name }} · 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: dietory-windows-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Dietory 5.3.0 customer package
+    name: Build and publish Dietory 5.3.0 customer package
     runs-on: windows-latest
 
     steps:
@@ -33,6 +36,7 @@ jobs:
           git branch --show-current
           node --version
           npm --version
+          gh --version
           Get-ChildItem -Force
           Get-ChildItem src-tauri -Force
           Get-ChildItem installer -Force
@@ -60,17 +64,26 @@ jobs:
       - name: Build Tauri installer
         run: npx tauri build --bundles nsis
 
-      - name: Prepare USB package
+      - name: Prepare customer package
         shell: pwsh
         run: |
           $releaseDir = Join-Path $pwd "release-usb"
           $bundleDir = Join-Path $pwd "src-tauri\target\release\bundle\nsis"
+          $versionedZip = Join-Path $pwd "Dietory-5.3.0-Windows.zip"
+          $latestZip = Join-Path $pwd "Dietory-Windows-Latest.zip"
+          $checksumFile = Join-Path $pwd "SHA256SUMS.txt"
+
+          if (Test-Path $releaseDir) {
+            Remove-Item -LiteralPath $releaseDir -Recurse -Force
+          }
           New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
+
           $setup = Get-ChildItem -Path $bundleDir -Filter "*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $setup) {
             if (Test-Path $bundleDir) { Get-ChildItem -Path $bundleDir -Recurse }
             throw "NSIS setup EXE was not found."
           }
+
           Copy-Item $setup.FullName (Join-Path $releaseDir "Dietory-5.3.0-Setup.exe") -Force
           Copy-Item "installer\Customer-Install.vbs" (Join-Path $releaseDir "INSTALL.vbs") -Force
           Copy-Item "installer\Customer-Install-Silent.vbs" (Join-Path $releaseDir "INSTALL-SILENT.vbs") -Force
@@ -82,18 +95,65 @@ jobs:
           $guidePath = Join-Path $pwd "docs\Dietory_User_Guide_FA.pdf"
           if (Test-Path $guidePath) {
             Copy-Item $guidePath (Join-Path $releaseDir "Dietory-Guide-FA.pdf") -Force
-            Write-Host "Persian user guide added to the artifact."
+            Write-Host "Persian user guide added to the package."
           } else {
-            Write-Warning "docs\Dietory_User_Guide_FA.pdf was not found. The installer artifact will be created without the guide PDF."
+            Write-Warning "docs\Dietory_User_Guide_FA.pdf was not found. The customer package will be created without the guide PDF."
           }
 
           "branch=${{ github.ref_name }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8
           "commit=${{ github.sha }}" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
           "version=5.3.0" | Out-File (Join-Path $releaseDir "BUILD-INFO.txt") -Encoding utf8 -Append
-          Get-ChildItem $releaseDir
 
-      - name: Upload release-usb artifact
+          if (Test-Path $versionedZip) { Remove-Item $versionedZip -Force }
+          if (Test-Path $latestZip) { Remove-Item $latestZip -Force }
+          Compress-Archive -Path (Join-Path $releaseDir "*") -DestinationPath $versionedZip -CompressionLevel Optimal -Force
+          Copy-Item $versionedZip $latestZip -Force
+
+          $versionedHash = (Get-FileHash $versionedZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $latestHash = (Get-FileHash $latestZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$versionedHash  Dietory-5.3.0-Windows.zip" | Out-File $checksumFile -Encoding ascii
+          "$latestHash  Dietory-Windows-Latest.zip" | Out-File $checksumFile -Encoding ascii -Append
+
+          Write-Host "Customer package contents:"
+          Get-ChildItem $releaseDir
+          Write-Host "Release assets:"
+          Get-Item $versionedZip, $latestZip, $checksumFile
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: dietory-5.3.0-release
-          path: release-usb
+          path: |
+            Dietory-5.3.0-Windows.zip
+            Dietory-Windows-Latest.zip
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v5.3.0"
+          $repo = "${{ github.repository }}"
+          $title = "Dietory 5.3.0 - Windows"
+          $notes = "RELEASE_NOTES_V5.3.0_FA.md"
+          $versionedZip = "Dietory-5.3.0-Windows.zip"
+          $latestZip = "Dietory-Windows-Latest.zip"
+          $checksumFile = "SHA256SUMS.txt"
+
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists; updating notes and replacing assets."
+            gh release edit $tag --repo $repo --title $title --notes-file $notes --latest
+            if ($LASTEXITCODE -ne 0) { throw "Updating release metadata failed." }
+            gh release upload $tag $versionedZip $latestZip $checksumFile --repo $repo --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Uploading replacement release assets failed." }
+          } else {
+            Write-Host "Creating release $tag."
+            gh release create $tag $versionedZip $latestZip $checksumFile --repo $repo --target "${{ github.sha }}" --title $title --notes-file $notes --latest
+            if ($LASTEXITCODE -ne 0) { throw "Creating the GitHub Release failed." }
+          }
+
+          gh release view $tag --repo $repo --json url,tagName,name,assets
