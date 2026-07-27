@@ -729,7 +729,13 @@ function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit,
   const [rangeStart, setRangeStart] = useState(todayIsoDate());
   const [rangeEnd, setRangeEnd] = useState(addDaysToIso(todayIsoDate(), 7));
   const [dashboardError, setDashboardError] = useState("");
+  const [dashboardNow, setDashboardNow] = useState(() => new Date());
   const calendarSectionRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setDashboardNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!isDesktopRuntime()) {
@@ -761,7 +767,7 @@ function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit,
       return visit.visit_date >= rangeStart && visit.visit_date <= rangeEnd;
     };
     return items.filter(inRange).sort((a, b) => `${a.visit_date} ${a.visit_time}`.localeCompare(`${b.visit_date} ${b.visit_time}`)).slice(0, 8);
-  }, [stats, calendarMode, exactDate, rangeStart, rangeEnd]);
+  }, [stats, calendarMode, exactDate, rangeStart, rangeEnd, dashboardNow]);
 
   const dashboardIsEmpty = Boolean(stats && stats.total_clients === 0 && stats.visits_today === 0 && stats.upcoming_followups === 0);
   const dietitianFirstName = settings.dietitian_name.trim().split(/\s+/)[0] || "";
@@ -772,7 +778,7 @@ function Dashboard({ version, settings, onNew, onPrevious, onCalculator, onEdit,
       : settings.clinic_name.trim()
         ? `به ${settings.clinic_name.trim()} خوش آمدید.`
         : "به سامانه یکپارچه مدیریت کلینیک تغذیه خوش آمدید.";
-  const dashboardDateText = `امروز ${formatPersianDate().replace(/,/g, "،").replace("پنجشنبه", "پنج‌شنبه")} است`;
+  const dashboardDateText = `امروز ${formatPersianDate(dashboardNow).replace(/,/g, "،").replace("پنجشنبه", "پنج‌شنبه")} است`;
 
   return (
     <>
@@ -2924,6 +2930,7 @@ function DateField({ label, value, onChange, error }: { label: string; value: st
   const normalizedValue = coerceDateToIso(value) || todayIsoDate();
   const currentParts = jalaliPartsFromIso(normalizedValue);
   const [text, setText] = useState(isoToJalaliInput(normalizedValue));
+  const [inputError, setInputError] = useState("");
   const [openPicker, setOpenPicker] = useState(false);
   const [visibleMonth, setVisibleMonth] = useState({ year: currentParts.jy, month: currentParts.jm });
   const rootRef = useRef<HTMLDivElement>(null);
@@ -2932,25 +2939,55 @@ function DateField({ label, value, onChange, error }: { label: string; value: st
   useEffect(() => {
     const nextIso = coerceDateToIso(value) || todayIsoDate();
     setText(isoToJalaliInput(nextIso));
+    setInputError("");
     const next = jalaliPartsFromIso(nextIso);
     setVisibleMonth({ year: next.jy, month: next.jm });
   }, [value]);
+
+  const parsedTextIso = coerceDateToIso(text);
+  const selectedIso = parsedTextIso || normalizedValue;
+  const selected = jalaliPartsFromIso(selectedIso);
+  const todayParts = jalaliPartsFromIso(todayIsoDate());
+
+  const openCalendar = () => {
+    const source = coerceDateToIso(text) || normalizedValue;
+    const parts = jalaliPartsFromIso(source);
+    setVisibleMonth({ year: parts.jy, month: parts.jm });
+    setOpenPicker(true);
+  };
 
   const commitText = (nextText: string, force = false) => {
     setText(nextText);
     const iso = jalaliInputToIso(nextText);
     if (iso) {
+      setInputError("");
       onChange(iso);
       if (force) setText(isoToJalaliInput(iso));
+      return true;
     }
+    if (force) setInputError("تاریخ معتبر وارد کنید؛ نمونه: ۱۴۰۵/۰۵/۰۵");
+    return false;
   };
+
   const chooseDay = (day: number) => {
     const iso = jalaliInputToIso(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}/${String(day).padStart(2, "0")}`);
     if (!iso) return;
     onChange(iso);
     setText(isoToJalaliInput(iso));
+    setInputError("");
     setOpenPicker(false);
   };
+
+  const chooseToday = () => {
+    const today = todayIsoDate();
+    onChange(today);
+    setText(isoToJalaliInput(today));
+    setInputError("");
+    const parts = jalaliPartsFromIso(today);
+    setVisibleMonth({ year: parts.jy, month: parts.jm });
+    setOpenPicker(false);
+  };
+
   const moveMonth = (amount: number) => {
     setVisibleMonth((current) => {
       const nextMonth = current.month + amount;
@@ -2959,29 +2996,82 @@ function DateField({ label, value, onChange, error }: { label: string; value: st
       return { year: current.year, month: nextMonth };
     });
   };
-  const selected = jalaliPartsFromIso(normalizedValue);
-  const currentJalaliYear = jalaliPartsFromIso(todayIsoDate()).jy;
-  const yearOptions = Array.from(new Set([selected.jy, ...Array.from({ length: 106 }, (_, index) => currentJalaliYear + 5 - index)]))
-    .sort((a, b) => b - a);
+
+  const currentJalaliYear = todayParts.jy;
+  const yearOptions = Array.from(new Set([
+    visibleMonth.year,
+    selected.jy,
+    ...Array.from({ length: 141 }, (_, index) => currentJalaliYear + 20 - index),
+  ])).sort((a, b) => b - a);
   const days = Array.from({ length: daysInJalaliMonth(visibleMonth.year, visibleMonth.month) }, (_, index) => index + 1);
   const firstDayIso = jalaliInputToIso(`${visibleMonth.year}/${String(visibleMonth.month).padStart(2, "0")}/01`);
-  const firstDayOffset = firstDayIso ? (new Date(`${firstDayIso}T00:00:00`).getDay() + 1) % 7 : 0;
+  const firstDayOffset = firstDayIso
+    ? (() => {
+        const [year, month, day] = firstDayIso.split("-").map(Number);
+        return (new Date(year, month - 1, day).getDay() + 1) % 7;
+      })()
+    : 0;
+  const shownError = error || inputError;
 
   return (
-    <div ref={rootRef} className="relative">
+    <div ref={rootRef} className={cn("relative", openPicker && "z-[90]") }>
       <label className="label">{label}</label>
-      <div className={cn("mt-2 flex h-12 items-center rounded-control border bg-white px-3 focus-within:ring-4", error ? "border-red-300 focus-within:border-red-400 focus-within:ring-red-100" : "border-warm-200 focus-within:border-[var(--primary)] focus-within:ring-emerald/10")}>
-        <input className="numbers min-w-0 flex-1 border-0 bg-transparent text-left outline-none" dir="ltr" value={text} onFocus={() => setOpenPicker(true)} onChange={(event) => commitText(event.target.value)} onBlur={() => commitText(text, true)} placeholder="۱۴۰۵/۰۴/۱۹" />
-        <button type="button" className="grid h-9 w-9 place-items-center rounded-control text-olive hover:bg-warm-50" onClick={() => setOpenPicker((current) => !current)} aria-label="باز کردن تقویم"><CalendarDays size={19} /></button>
+      <div className={cn("date-field-control mt-2 flex h-12 items-center rounded-control border bg-white px-3 focus-within:ring-4", shownError ? "border-red-300 focus-within:border-red-400 focus-within:ring-red-100" : "border-warm-200 focus-within:border-[var(--primary)] focus-within:ring-emerald/10")}>
+        <input
+          className="numbers min-w-0 flex-1 border-0 bg-transparent text-center text-charcoal outline-none"
+          dir="ltr"
+          inputMode="numeric"
+          value={text}
+          onFocus={openCalendar}
+          onChange={(event) => {
+            const nextText = event.target.value;
+            setText(nextText);
+            setInputError("");
+            const iso = jalaliInputToIso(nextText);
+            if (iso) onChange(iso);
+          }}
+          onBlur={(event) => {
+            if (event.relatedTarget && rootRef.current?.contains(event.relatedTarget as Node)) return;
+            commitText(text, true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              if (commitText(text, true)) setOpenPicker(false);
+            }
+            if (event.key === "Escape") {
+              setText(isoToJalaliInput(normalizedValue));
+              setInputError("");
+              setOpenPicker(false);
+            }
+          }}
+          placeholder="۱۴۰۵/۰۵/۰۵"
+          aria-expanded={openPicker}
+          aria-label={label}
+        />
+        <button
+          type="button"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-control text-olive hover:bg-warm-50"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => openPicker ? setOpenPicker(false) : openCalendar()}
+          aria-label="باز کردن تقویم شمسی"
+          aria-expanded={openPicker}
+        >
+          <CalendarDays size={19} />
+        </button>
       </div>
-      <FieldError text={error} />
+      <FieldError text={shownError} />
       {openPicker && (
-        <div className="popover-panel calendar-popover absolute z-40 mt-2 w-80 p-4">
-          <div className="mb-4 flex items-center justify-between">
+        <div dir="rtl" className="popover-panel calendar-popover absolute z-[100] mt-2 p-4" role="dialog" aria-label={`انتخاب ${label}`}>
+          <div className="mb-4 flex items-center justify-between gap-2">
             <button type="button" className="calendar-nav" onClick={() => moveMonth(-1)} aria-label="ماه قبل"><ChevronRight size={18} /></button>
-            <div className="flex items-center gap-2">
-              <select className="rounded-control border border-warm-100 bg-white px-2 py-1 text-xs" value={visibleMonth.month} onChange={(event) => setVisibleMonth((current) => ({ ...current, month: Number(event.target.value) }))}>{persianMonthNames.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}</select>
-              <select className="numbers rounded-control border border-warm-100 bg-white px-2 py-1 text-xs" value={visibleMonth.year} onChange={(event) => setVisibleMonth((current) => ({ ...current, year: Number(event.target.value) }))}>{yearOptions.map((year) => <option key={year} value={year}>{toPersianDigits(year)}</option>)}</select>
+            <div className="calendar-selects flex min-w-0 flex-1 items-center justify-center gap-2">
+              <select className="calendar-select" value={visibleMonth.month} onChange={(event) => setVisibleMonth((current) => ({ ...current, month: Number(event.target.value) }))} aria-label="ماه شمسی">
+                {persianMonthNames.map((name, index) => <option key={name} value={index + 1}>{name}</option>)}
+              </select>
+              <select className="calendar-select numbers" value={visibleMonth.year} onChange={(event) => setVisibleMonth((current) => ({ ...current, year: Number(event.target.value) }))} aria-label="سال شمسی">
+                {yearOptions.map((year) => <option key={year} value={year}>{toPersianDigits(year)}</option>)}
+              </select>
             </div>
             <button type="button" className="calendar-nav" onClick={() => moveMonth(1)} aria-label="ماه بعد"><ChevronLeft size={18} /></button>
           </div>
@@ -2990,10 +3080,15 @@ function DateField({ label, value, onChange, error }: { label: string; value: st
             {Array.from({ length: firstDayOffset }, (_, index) => <span key={`blank-${index}`} />)}
             {days.map((day) => {
               const active = selected.jy === visibleMonth.year && selected.jm === visibleMonth.month && selected.jd === day;
-              return <button key={day} type="button" onClick={() => chooseDay(day)} className={cn("calendar-day", active && "calendar-day-active")}>{toPersianDigits(day)}</button>;
+              const isToday = todayParts.jy === visibleMonth.year && todayParts.jm === visibleMonth.month && todayParts.jd === day;
+              return <button key={day} type="button" onClick={() => chooseDay(day)} className={cn("calendar-day", isToday && "calendar-day-today", active && "calendar-day-active")} aria-current={active ? "date" : undefined}>{toPersianDigits(day)}</button>;
             })}
           </div>
-          <div className="mt-4 flex items-center justify-between border-t border-warm-100 pt-3"><button type="button" className="text-xs font-bold text-olive" onClick={() => { const today = todayIsoDate(); onChange(today); setText(isoToJalaliInput(today)); setOpenPicker(false); }}>امروز</button><button type="button" className="text-xs text-warm-500" onClick={() => setOpenPicker(false)}>بستن</button></div>
+          <div className="mt-4 flex items-center justify-between border-t border-warm-100 pt-3">
+            <button type="button" className="text-xs font-bold text-olive" onClick={chooseToday}>برو به امروز</button>
+            <span className="numbers text-[10px] text-warm-500">{toPersianDigits(visibleMonth.year)} / {toPersianDigits(String(visibleMonth.month).padStart(2, "0"))}</span>
+            <button type="button" className="text-xs text-warm-500" onClick={() => setOpenPicker(false)}>بستن</button>
+          </div>
         </div>
       )}
     </div>
