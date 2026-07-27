@@ -24,7 +24,7 @@ If installer = "" Then
   WScript.Quit 1
 End If
 
-' Close Dietory through its normal window-close path so the in-app complete backup runs.
+' Close Dietory normally before creating the independent pre-update safety backup.
 closeCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command """ & _
   "$names=@('persian_dietitian_desktop','Dietory');" & _
   "$ps=Get-Process -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.ProcessName };" & _
@@ -34,7 +34,7 @@ closeCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command """ &
   "if(Get-Process -ErrorAction SilentlyContinue | Where-Object { $names -contains $_.ProcessName }){exit 9}};exit 0"""
 closeResult = shell.Run(closeCommand, 0, True)
 If closeResult <> 0 Then
-  MsgBox "Dietory هنوز باز است یا پشتیبان‌گیری هنگام خروج کامل نشده است. برنامه را به‌صورت عادی ببندید و دوباره گزینه بروزرسانی را اجرا کنید.", vbExclamation, "Dietory Update"
+  MsgBox "Dietory هنوز باز است. برنامه را ببندید و دوباره گزینه بروزرسانی را اجرا کنید.", vbExclamation, "Dietory Update"
   WScript.Quit 2
 End If
 
